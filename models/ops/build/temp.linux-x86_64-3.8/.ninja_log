@@ -1,0 +1,4 @@
+# ninja log v5
+1	4719	1711939441561793433	/code/AQD-DETR/models/ops/build/temp.linux-x86_64-3.8/code/AQD-DETR/models/ops/src/cpu/ms_deform_attn_cpu.o	1a0f8dca68703420
+2	16316	1711939453147939125	/code/AQD-DETR/models/ops/build/temp.linux-x86_64-3.8/code/AQD-DETR/models/ops/src/vision.o	2556172f4a3636c7
+1	17378	1711939454229227364	/code/AQD-DETR/models/ops/build/temp.linux-x86_64-3.8/code/AQD-DETR/models/ops/src/cuda/ms_deform_attn_cuda.o	424a948c7dc54b4e

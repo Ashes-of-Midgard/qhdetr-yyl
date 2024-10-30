@@ -1,0 +1,10 @@
+conda create -n qhdetr python=3.8
+conda activate qhdetr
+conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch
+cd AQD-DETR
+pip install -r requirements.txt
+pip install openmim
+mim install mmcv-full
+pip install mmdet
+cd models/ops
+python setup.py build install
