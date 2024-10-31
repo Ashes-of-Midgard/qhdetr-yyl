@@ -235,6 +235,12 @@ def get_args_parser():
 
     # * logging technologies
     parser.add_argument("--use_wandb", action="store_true", default=False)
+
+    # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+    parser.add_argument("--predictions_merge", action="store_true")
+    parser.add_argument("--lowest_number_predictions_one2one", default=50, type=int)
+    parser.add_argument("--lowest_number_predictions_one2many", default=250, type=int)
+    # ====== END MODIFIED - PREDICTIONS MERGE ======
     return parser
 
 
