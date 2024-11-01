@@ -189,16 +189,47 @@ class DeformableDETR(nn.Module):
         """
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_tensor_list(samples)
+        # samples: NestedTensor, samples.tensors.shape=[batch_size, 3, H, W], samples.mask.shape=[batch_size, H, W]
         features, pos = self.backbone(samples)
+        # features: List[NestedTensor]
+        #   - features[i].tensor: shape=[batch_size, d_i, h_i, w_i]
+        #   - features[i].mask: shape=[batch_size, h_i, w_i]
+        # pos: List[Tensor]
+        #   - pos[i]: shape=[batch_size, d_model, h_i, w_i]
 
         srcs = []
         masks = []
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
+            # self.input_proj: ModuleList
+            #   - self.input_proj[l]: Sequence, d_l -> d_model
+            # self.input_proj[l](src): Tensor, shape=[batch_size, d_model, h_l, w_l]
             srcs.append(self.input_proj[l](src))
+            # mask: Tensor, shape=[batch_size, h_l, w_l]
             masks.append(mask)
             assert mask is not None
         if self.num_feature_levels > len(srcs):
+            # If the expected feature levels' number is larger than backbone's
+            # output levels' number. The feature of the last level will be put
+            # into a projection sequence, of which the output of each projection
+            # will be used to fill the srcs list until expected length.
+            #
+            # features[-1].tensors -> input_proj[l]
+            #                               |
+            #                               V
+            #                             src[l]
+            #                               |
+            #                               V
+            #                         input_proj[l+1]
+            #                               |
+            #                               V
+            #                             src[l+1]
+            #                               |
+            #                               V 
+            #                             ......
+            #                               |
+            #                               V 
+            #                             src[num_feature_levels - 1]
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
@@ -209,7 +240,9 @@ class DeformableDETR(nn.Module):
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(
                     torch.bool
                 )[0]
+                # masks are simply resized to the same size as features
                 pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
+                # Use the backbone's position encoder to generate new pos embeddings for extra levels of feature
                 srcs.append(src)
                 masks.append(mask)
                 pos.append(pos_l)
@@ -226,7 +259,9 @@ class DeformableDETR(nn.Module):
         )
         self_attn_mask[self.num_queries_one2one :, 0 : self.num_queries_one2one,] = True
         self_attn_mask[0 : self.num_queries_one2one, self.num_queries_one2one :,] = True
-
+        # self_attn_mask: Tensor, shape=[num_queries, num_queries]
+        # note: num_queries==num_queries_one2one + num_queries_one2many
+        
         (
             hs,
             init_reference,
