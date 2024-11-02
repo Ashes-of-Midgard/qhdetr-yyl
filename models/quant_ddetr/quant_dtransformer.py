@@ -187,43 +187,78 @@ class DeformableTransformer(nn.Module):
         return output_memory, output_proposals
 
     def get_valid_ratio(self, mask):
+        """Input:
+            - mask: Tensor, shape=[batch_size, h, w]
+           
+           Output
+            - Tensor, shape=[batch_size, 2]
+        """
         _, H, W = mask.shape
         valid_H = torch.sum(~mask[:, :, 0], 1)
         valid_W = torch.sum(~mask[:, 0, :], 1)
+        # valid_H: Tensor, shape=[batch_size]
+        # valid_W: Tensor, shape=[batch_size]
         valid_ratio_h = valid_H.float() / H
         valid_ratio_w = valid_W.float() / W
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
+        # valid_ratio: Tensor, shape=[batch_size, 2]
         return valid_ratio
 
     @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
     def forward(self, srcs, masks, pos_embeds, query_embed=None, self_attn_mask=None):
-
+        """Input:
+            - srcs: List[Tensor]
+                - srcs[i]: Tensor, shape=[batch_size, d_model, h_i, w_i]
+            - masks: List[Tensor]
+                - masks[i]: Tensor, shape=[batch_size, h_i, w_i]
+            - pos_embeds: List[Tensor]
+                - pos_embeds[i]: Tensor, shape=[batch_size, d_model, h_i, w_i]
+            - query_embed: None or Tensor, shape=[num_queries, d_model] or [num_queries, d_model*2]
+            - self_attn_mask: Tensor, shape=[num_queries, num_queries]
+           Output:
+            - 
+        """
         # prepare input for encoder
         src_flatten = []
         mask_flatten = []
         lvl_pos_embed_flatten = []
         spatial_shapes = []
         for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+            # src: Tensor, shape=[batch_size, d_model, h_lvl, w_lvl]
+            # mask: Tensor, shape=[batch_size, h_lvl, w_lvl]
+            # pos_embed: Tensor, shape=[batch_size, d_model, h_lvl, w_lvl]
             bs, c, h, w = src.shape
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)
             src = src.flatten(2).transpose(1, 2)
+            # convert feature map to feature sequence
+            # src: Tensor, shape=[batch_size, h_lvl*w_lvl, d_model]
             mask = mask.flatten(1)
+            # mask: Tensor, shape=[batch_size, h_lvl*w_lvl]
             pos_embed = pos_embed.flatten(2).transpose(1, 2)
+            # pos_embed: Tensor, shape=[batch_size, h_lvl*w_lvl, d_model]
+            # self.level_embed[lvl]: Tensor, shape=[d_model]
             lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
+            # Add level position embedding to feature map position embedding
+            # lvl_pos_embed: Tensor, shape=[batch_size, h_lvl*w_lvl, d_model]
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             src_flatten.append(src)
             mask_flatten.append(mask)
+        # spatial_shapes: List[Tensor]
+        # spatial_shapes[i]: Tensor, shape=[2], data=[h_i, w_i]
         src_flatten = torch.cat(src_flatten, 1)
         mask_flatten = torch.cat(mask_flatten, 1)
         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
         spatial_shapes = torch.as_tensor(
             spatial_shapes, dtype=torch.long, device=src_flatten.device
         )
+        # spatial_shapes: Tensor, shape=[num_levels, 2]
         level_start_index = torch.cat(
             (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1])
         )
+        # level_start_index: Tensor, shape=[num_levels]
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+        # valid_ratios: Tensor, shape=[batch_size, num_levels, 2]
 
         # encoder
         memory = self.encoder(
@@ -367,7 +402,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
 
         # ffn
         src = self.forward_ffn(src)
-
+        
         return src
 
 

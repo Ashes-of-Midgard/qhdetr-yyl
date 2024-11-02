@@ -250,6 +250,7 @@ class DeformableDETR(nn.Module):
         query_embeds = None
         if not self.two_stage or self.mixed_selection:
             query_embeds = self.query_embed.weight[0 : self.num_queries, :]
+            # query_embeds: Tensor, shape=[num_queries, d_model] or [num_queries, d_model*2]
 
         # make attn mask
         """ attention mask to prevent information leakage
@@ -327,114 +328,146 @@ class DeformableDETR(nn.Module):
         # raise KeyboardInterrupt()
 
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        if self.predictions_merge:
-            outputs_device = outputs_classes_one2one.device
-            n_lvls, bs, n_q, n_cls = outputs_classes_one2one.shape
-            predictions_clusters = []
-            for lvl in range(n_lvls):
-                predictions_clusters_this_level = []
-                for b in range(bs):
-                    kl_div_matrix = torch.zeros([n_q, n_q])
-                    iou_matrix = torch.zeros([n_q, n_q])
-                    for i in range(n_q):
-                        for j in range(n_q):
-                            kl_div_matrix[i][j] = nn.functional.kl_div(outputs_classes_one2one[lvl, b, i],
-                                                                       outputs_classes_one2one[lvl, b, j]) + \
-                                                nn.functional.kl_div(outputs_classes_one2one[lvl, b, j],
-                                                                     outputs_classes_one2one[lvl, b, i])
-                            iou_matrix[i][j] = get_IoU(outputs_coords_one2one[lvl, b, i],
-                                                       outputs_coords_one2one[lvl, b, j])
+        with torch.no_grad():
+            if self.predictions_merge:
+                outputs_device = outputs_classes_one2one.device
 
-                    predictions_clusters_this_image = [[i] for i in range(n_q)]
-                    # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
-                    i = 0
-                    while i < len(predictions_clusters_this_image) and len(predictions_clusters_this_image) >= self.lowest_number_predictions_one2one:
-                        j = i+1
-                        while j < len(predictions_clusters_this_image) and len(predictions_clusters_this_image) >= self.lowest_number_predictions_one2one:
-                            I = predictions_clusters_this_image[i][0]
-                            J = predictions_clusters_this_image[j][0]
-                            if kl_div_matrix[I][J] < self.kl_div_threshold and iou_matrix[I][J] > self.iou_threshold:
-                                predictions_clusters_this_image[i].extend(predictions_clusters_this_image.pop(j))
-                            else:
-                                j += 1
-                        i += 1
-                    predictions_clusters_this_level.append(predictions_clusters_this_image)
-                predictions_clusters.append(predictions_clusters_this_level)
-            
-            max_num_clusters_for_each_image = 0
-            for lvl in range(n_lvls):
-                for b in range(bs):
-                    if len(predictions_clusters[lvl][b]) > max_num_clusters_for_each_image:
-                        max_num_clusters_for_each_image = len(predictions_clusters[lvl][b])
+                # merge: one2one predictions
+                n_lvls, bs, n_q, n_cls = outputs_classes_one2one.shape
+                predictions_clusters = []
+                for lvl in range(n_lvls):
+                    predictions_clusters_this_level = []
+                    for b in range(bs):
+                        prob = outputs_classes_one2one[lvl, b].sigmoid().detach()
+                        prob_line = prob.unsqueeze(0)
+                        prob_row = prob.unsqueeze(1)
+                        kl_div_matrix = nn.functional.kl_div(prob_line,
+                                                             prob_row,
+                                                             reduction='none',
+                                                             log_target=True) + \
+                                        nn.functional.kl_div(prob_row,
+                                                             prob_line,
+                                                             reduction='none',
+                                                             log_target=True)
+                        kl_div_matrix = kl_div_matrix.sum(2)
 
-            outputs_classes_one2one_merged = torch.zeros([n_lvls, bs, max_num_clusters_for_each_image, n_cls])
-            outputs_coords_one2one_merged = torch.zeros([n_lvls, bs, max_num_clusters_for_each_image, 4])
-            for lvl in range(n_lvls):
-                for b in range(bs):
-                    for i in range(len(predictions_clusters[lvl][b])):
-                        predictions = predictions_clusters[lvl][b][i]
-                        predictions_classes_mean = torch.stack([outputs_classes_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
-                        predictions_coords_mean = torch.stack([outputs_coords_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
-                        predictions_classes_mean = predictions_classes_mean.mean(dim=0)
-                        predictions_coords_mean = predictions_coords_mean.mean(dim=0)
-                        outputs_classes_one2one_merged[lvl][b][i] = predictions_classes_mean
-                        outputs_coords_one2one_merged[lvl][b][i] = predictions_coords_mean
+                        X_min = (outputs_coords_one2one[lvl, b, :, 0] - outputs_coords_one2one[lvl, b, :, 2]).detach()
+                        Y_min = (outputs_coords_one2one[lvl, b, :, 1] - outputs_coords_one2one[lvl, b, :, 3]).detach()
+                        X_max = (outputs_coords_one2one[lvl, b, :, 0] + outputs_coords_one2one[lvl, b, :, 2]).detach()
+                        Y_max = (outputs_coords_one2one[lvl, b, :, 0] + outputs_coords_one2one[lvl, b, :, 3]).detach()
+                        
+                        X_intersection_min = torch.max(X_min.unsqueeze(0), X_min.unsqueeze(1))
+                        Y_intersection_min = torch.max(Y_min.unsqueeze(0), Y_min.unsqueeze(1))
+                        X_intersection_max = torch.min(X_max.unsqueeze(0), X_max.unsqueeze(1))
+                        Y_intersection_max = torch.min(Y_max.unsqueeze(0), Y_max.unsqueeze(1))
 
-            n_lvls, bs, n_q, n_cls = outputs_classes_one2many.shape
-            predictions_clusters = []
-            for lvl in range(n_lvls):
-                predictions_clusters_this_level = []
-                for b in range(bs):
-                    kl_div_matrix = torch.zeros([n_q, n_q])
-                    iou_matrix = torch.zeros([n_q, n_q])
-                    for i in range(n_q):
-                        for j in range(n_q):
-                            kl_div_matrix[i][j] = nn.functional.kl_div(outputs_classes_one2many[lvl, b, i],
-                                                                       outputs_classes_one2many[lvl, b, j]) + \
-                                                nn.functional.kl_div(outputs_classes_one2many[lvl, b, j],
-                                                                     outputs_classes_one2many[lvl, b, i])
-                            iou_matrix[i][j] = get_IoU(outputs_coords_one2many[lvl, b, i],
-                                                       outputs_coords_one2many[lvl, b, j])
+                        intersection_width = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
+                        intersection_height = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
+                        intersection_area = intersection_width * intersection_height
 
-                    predictions_clusters_this_image = [[i] for i in range(n_q)]
-                    # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
-                    i = 0
-                    while i < len(predictions_clusters_this_image) and len(predictions_clusters_this_image) >= self.lowest_number_predictions_one2many:
-                        j = i+1
-                        while j < len(predictions_clusters_this_image) and len(predictions_clusters_this_image) >= self.lowest_number_predictions_one2many:
-                            I = predictions_clusters_this_image[i][0]
-                            J = predictions_clusters_this_image[j][0]
-                            if kl_div_matrix[I][J] < self.kl_div_threshold and iou_matrix[I][J] > self.iou_threshold:
-                                predictions_clusters_this_image[i].extend(predictions_clusters_this_image.pop(j))
-                            else:
-                                j += 1
-                        i += 1
-                    predictions_clusters_this_level.append(predictions_clusters_this_image)
-                predictions_clusters.append(predictions_clusters_this_level)
-            
-            max_num_clusters_for_each_image = 0
-            for lvl in range(n_lvls):
-                for b in range(bs):
-                    if len(predictions_clusters[lvl][b]) > max_num_clusters_for_each_image:
-                        max_num_clusters_for_each_image = len(predictions_clusters[lvl][b])
+                        box_area = (X_max - X_min) * (Y_max - Y_min)
+                        union_area = (box_area.unsqueeze(0) + box_area.unsqueeze(1) - intersection_area)
+                        iou_matrix = intersection_area / (union_area + 1e-6)
 
-            outputs_classes_one2many_merged = torch.zeros([n_lvls, bs, max_num_clusters_for_each_image, n_cls])
-            outputs_coords_one2many_merged = torch.zeros([n_lvls, bs, max_num_clusters_for_each_image, 4])
-            for lvl in range(n_lvls):
-                for b in range(bs):
-                    for i in range(len(predictions_clusters[lvl][b])):
-                        predictions = predictions_clusters[lvl][b][i]
-                        predictions_classes_mean = torch.stack([outputs_classes_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
-                        predictions_coords_mean = torch.stack([outputs_coords_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
-                        predictions_classes_mean = predictions_classes_mean.mean(dim=0)
-                        predictions_coords_mean = predictions_coords_mean.mean(dim=0)
-                        outputs_classes_one2many_merged[lvl][b][i] = predictions_classes_mean
-                        outputs_coords_one2many_merged[lvl][b][i] = predictions_coords_mean
+                        merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) * (iou_matrix > torch.tensor(self.iou_threshold))
+                        triangular_matrix = torch.arange(n_q).unsqueeze(0) > torch.arange(n_q).unsqueeze(1)
+                        merge_mask = merge_mask*triangular_matrix.to(outputs_device)
 
-            outputs_classes_one2one = outputs_classes_one2one_merged.to(outputs_device)
-            outputs_coords_one2one = outputs_coords_one2one_merged.to(outputs_device)
-            outputs_classes_one2many = outputs_classes_one2many_merged.to(outputs_device)
-            outputs_coords_one2many = outputs_coords_one2many_merged.to(outputs_device)
+                        predictions_clusters_this_image = [[i] for i in range(n_q)]
+                        # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
+                        index_nonezero = torch.nonzero(merge_mask, as_tuple=True)
+                        for i in range(len(index_nonezero[0])):
+                            line_index = index_nonezero[0][i].item()
+                            if predictions_clusters_this_image[line_index] is not None:
+                                predictions_clusters_this_image[line_index].append(index_nonezero[1][i].item())
+                                predictions_clusters_this_image[index_nonezero[1][i].item()] = None
+                        predictions_clusters_this_level.append(predictions_clusters_this_image)
+                    predictions_clusters.append(predictions_clusters_this_level)
+
+                outputs_classes_one2one_merged = torch.zeros([n_lvls, bs, n_q, n_cls])
+                outputs_coords_one2one_merged = torch.zeros([n_lvls, bs, n_q, 4])
+                for lvl in range(n_lvls):
+                    for b in range(bs):
+                        for i in range(n_q):
+                            predictions = predictions_clusters[lvl][b][i]
+                            if predictions is not None:
+                                predictions_classes_mean = torch.stack([outputs_classes_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
+                                predictions_coords_mean = torch.stack([outputs_coords_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
+                                predictions_classes_mean = predictions_classes_mean.mean(dim=0)
+                                predictions_coords_mean = predictions_coords_mean.mean(dim=0)
+                                outputs_classes_one2one_merged[lvl][b][i] = predictions_classes_mean
+                                outputs_coords_one2one_merged[lvl][b][i] = predictions_coords_mean
+
+                # merge: one2many predictions
+                n_lvls, bs, n_q, n_cls = outputs_classes_one2many.shape
+                predictions_clusters = []
+                for lvl in range(n_lvls):
+                    predictions_clusters_this_level = []
+                    for b in range(bs):
+                        prob = outputs_classes_one2many[lvl, b].sigmoid().detach()
+                        prob_line = prob.unsqueeze(0)
+                        prob_row = prob.unsqueeze(1)
+                        kl_div_matrix = nn.functional.kl_div(prob_line,
+                                                             prob_row,
+                                                             reduction='none',
+                                                             log_target=True) + \
+                                        nn.functional.kl_div(prob_row,
+                                                             prob_line,
+                                                             reduction='none',
+                                                             log_target=True)
+                        kl_div_matrix = kl_div_matrix.sum(2)
+
+                        X_min = (outputs_coords_one2many[lvl, b, :, 0] - outputs_coords_one2many[lvl, b, :, 2]).detach()
+                        Y_min = (outputs_coords_one2many[lvl, b, :, 1] - outputs_coords_one2many[lvl, b, :, 3]).detach()
+                        X_max = (outputs_coords_one2many[lvl, b, :, 0] + outputs_coords_one2many[lvl, b, :, 2]).detach()
+                        Y_max = (outputs_coords_one2many[lvl, b, :, 0] + outputs_coords_one2many[lvl, b, :, 3]).detach()
+                        
+                        X_intersection_min = torch.max(X_min.unsqueeze(0), X_min.unsqueeze(1))
+                        Y_intersection_min = torch.max(Y_min.unsqueeze(0), Y_min.unsqueeze(1))
+                        X_intersection_max = torch.min(X_max.unsqueeze(0), X_max.unsqueeze(1))
+                        Y_intersection_max = torch.min(Y_max.unsqueeze(0), Y_max.unsqueeze(1))
+
+                        intersection_width = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
+                        intersection_height = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
+                        intersection_area = intersection_width * intersection_height
+
+                        box_area = (X_max - X_min) * (Y_max - Y_min)
+                        union_area = (box_area.unsqueeze(0) + box_area.unsqueeze(1) - intersection_area)
+                        iou_matrix = intersection_area / (union_area + 1e-6)
+
+                        merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) * (iou_matrix > torch.tensor(self.iou_threshold))
+                        triangular_matrix = torch.arange(n_q).unsqueeze(0) > torch.arange(n_q).unsqueeze(1)
+                        merge_mask = merge_mask*triangular_matrix.to(outputs_device)
+
+                        predictions_clusters_this_image = [[i] for i in range(n_q)]
+                        # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
+                        index_nonezero = torch.nonzero(merge_mask, as_tuple=True)
+                        for i in range(len(index_nonezero[0])):
+                            line_index = index_nonezero[0][i].item()
+                            if predictions_clusters_this_image[line_index] is not None:
+                                predictions_clusters_this_image[line_index].append(index_nonezero[1][i].item())
+                                predictions_clusters_this_image[index_nonezero[1][i].item()] = None
+                        predictions_clusters_this_level.append(predictions_clusters_this_image)
+                    predictions_clusters.append(predictions_clusters_this_level)
+
+                outputs_classes_one2many_merged = torch.zeros([n_lvls, bs, n_q, n_cls])
+                outputs_coords_one2many_merged = torch.zeros([n_lvls, bs, n_q, 4])
+                for lvl in range(n_lvls):
+                    for b in range(bs):
+                        for i in range(n_q):
+                            predictions = predictions_clusters[lvl][b][i]
+                            if predictions is not None:
+                                predictions_classes_mean = torch.stack([outputs_classes_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
+                                predictions_coords_mean = torch.stack([outputs_coords_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
+                                predictions_classes_mean = predictions_classes_mean.mean(dim=0)
+                                predictions_coords_mean = predictions_coords_mean.mean(dim=0)
+                                outputs_classes_one2many_merged[lvl][b][i] = predictions_classes_mean
+                                outputs_coords_one2many_merged[lvl][b][i] = predictions_coords_mean
+
+                outputs_classes_one2one = outputs_classes_one2one_merged.to(outputs_device)
+                outputs_coords_one2one = outputs_coords_one2one_merged.to(outputs_device)
+                outputs_classes_one2many = outputs_classes_one2many_merged.to(outputs_device)
+                outputs_coords_one2many = outputs_coords_one2many_merged.to(outputs_device)
         # ====== END MODIFIED - PREDICTIONS MERGE ======
 
         out = {

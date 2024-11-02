@@ -1,0 +1,4 @@
+# ninja log v5
+0	8261	1730442334983873437	/data/yangyuanlong/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/yangyuanlong/qhdetr-yyl/models/ops/src/cpu/ms_deform_attn_cpu.o	9716a8e5ca2795d8
+1	17688	1730442344415826216	/data/yangyuanlong/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/yangyuanlong/qhdetr-yyl/models/ops/src/cuda/ms_deform_attn_cuda.o	9038be215aa39c34
+1	24420	1730442351127792787	/data/yangyuanlong/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/yangyuanlong/qhdetr-yyl/models/ops/src/vision.o	d4ba3f34cef2d523
