@@ -238,8 +238,7 @@ def get_args_parser():
 
     # ====== YYL MODIFIED - PREDICTIONS MERGE ======
     parser.add_argument("--predictions_merge", action="store_true")
-    parser.add_argument("--lowest_number_predictions_one2one", default=50, type=int)
-    parser.add_argument("--lowest_number_predictions_one2many", default=250, type=int)
+    parser.add_argument("--lowest_number_predictions", default=300, type=int)
     # ====== END MODIFIED - PREDICTIONS MERGE ======
     return parser
 
@@ -495,6 +494,8 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         mce_need = [args.epochs]
+        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+        k_one2many = 0 if args.predictions_merge else args.k_one2many
         train_stats = train_one_epoch(
             model,
             criterion,
@@ -503,13 +504,14 @@ def main(args):
             device,
             epoch,
             args.clip_max_norm,
-            k_one2many=args.k_one2many,
+            k_one2many=k_one2many,
             lambda_one2many=args.lambda_one2many,
             use_wandb=args.use_wandb,
             use_fp16=args.use_fp16,
             use_mec=args.mec_loss,      # for mce
             total_epochs=args.epochs   # for mce
         )
+        # ====== END MODIFIED - PREDICTIONS MERGE ======
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / "checkpoint.pth"]

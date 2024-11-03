@@ -149,7 +149,7 @@ def make_coco_transforms(image_set):
     )
 
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
-    # scales = [128]
+    # scales = [704]
 
     if image_set == "train":
         return T.Compose(
@@ -171,7 +171,7 @@ def make_coco_transforms(image_set):
 
     if image_set == "val":
         return T.Compose([T.RandomResize([800], max_size=1333), normalize,])
-        # return T.Compose([T.RandomResize([128], max_size=1333), normalize,])
+        # return T.Compose([T.RandomResize([704], max_size=1333), normalize,])
 
     raise ValueError(f"unknown {image_set}")
 

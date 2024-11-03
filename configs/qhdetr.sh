@@ -22,8 +22,7 @@ python -u main.py \
     --look_forward_twice \
     --quant \
     --predictions_merge \
-    --lowest_number_predictions_one2one 3 \
-    --lowest_number_predictions_one2many 13 \
+    --lowest_number_predictions 300 \
     ${PY_ARGS}
 
 # python -u main.py \

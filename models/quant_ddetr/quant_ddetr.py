@@ -61,10 +61,9 @@ class DeformableDETR(nn.Module):
         mixed_selection=False,
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
         predictions_merge=False,
-        lowest_number_predictions_one2one = 50,
-        lowest_number_predictions_one2many = 250,
+        lowest_number_predictions = 50,
         kl_div_threshold = 3e-7,
-        iou_threshold = 0.9
+        iou_threshold = 0.8
         # ====== END MODIFIED - PREDICTIONS MERGE ======
     ):
         """ Initializes the model.
@@ -86,8 +85,8 @@ class DeformableDETR(nn.Module):
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        self.class_embed = nn.Linear(hidden_dim, num_classes) # full precision
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3) # full precision
         self.num_feature_levels = num_feature_levels
         if not two_stage:
             self.query_embed = nn.Embedding(num_queries, hidden_dim * 2)
@@ -166,8 +165,7 @@ class DeformableDETR(nn.Module):
         self.mixed_selection = mixed_selection
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
         self.predictions_merge = predictions_merge
-        self.lowest_number_predictions_one2one = lowest_number_predictions_one2one
-        self.lowest_number_predictions_one2many = lowest_number_predictions_one2many
+        self.lowest_number_predictions = lowest_number_predictions
         self.kl_div_threshold = kl_div_threshold
         self.iou_threshold = iou_threshold
         # ====== END MODIFIED - PREDICTIONS MERGE ======
@@ -275,7 +273,6 @@ class DeformableDETR(nn.Module):
         outputs_coords_one2one = []
         outputs_classes_one2many = []
         outputs_coords_one2many = []
-        # print('hs: ', hs.shape)
         # hs: shape=[n_levels, batch_size, n_queries, d_model]
         # n_queries == n_queries_one2one + n_queries_one2many
         for lvl in range(hs.shape[0]):
@@ -283,9 +280,7 @@ class DeformableDETR(nn.Module):
                 reference = init_reference
             else:
                 reference = inter_references[lvl - 1]
-            # print(f'reference of lvl {lvl}: ',reference.shape)
             reference = inverse_sigmoid(reference)
-            # print(f'inverse_sigmoid(reference) of lvl {lvl}: ',reference.shape)
             # reference: shape=[batch_size, n_queries, 4]
             # self.class_embed: ModuleList[Linear], containing: Linear(d_model, n_classes)
             outputs_class = self.class_embed[lvl](hs[lvl])
@@ -321,168 +316,111 @@ class DeformableDETR(nn.Module):
         outputs_coords_one2many = torch.stack(outputs_coords_one2many)
         # outputs_coords_one2many: shape=[n_levels, batch_size, n_queries_one2many, 4]
 
-        # print('outputs_classes_one2one: ', outputs_classes_one2one.shape)
-        # print('outputs_classes_one2many: ', outputs_classes_one2many.shape)
-        # print('outputs_coords_one2one: ', outputs_coords_one2one.shape)
-        # print('outputs_coords_one2may: ', outputs_coords_one2many.shape)
-        # raise KeyboardInterrupt()
-
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        with torch.no_grad():
-            if self.predictions_merge:
-                outputs_device = outputs_classes_one2one.device
+        if self.predictions_merge:
+            outputs_classes = torch.concat([outputs_classes_one2one, outputs_classes_one2many], dim=2)
+            outputs_coords = torch.concat([outputs_coords_one2one, outputs_coords_one2many], dim=2)
+            del outputs_classes_one2one
+            del outputs_classes_one2many
+            del outputs_coords_one2one
+            del outputs_coords_one2many
+            torch.cuda.empty_cache()
 
-                # merge: one2one predictions
-                n_lvls, bs, n_q, n_cls = outputs_classes_one2one.shape
-                predictions_clusters = []
-                for lvl in range(n_lvls):
-                    predictions_clusters_this_level = []
-                    for b in range(bs):
-                        prob = outputs_classes_one2one[lvl, b].sigmoid().detach()
-                        prob_line = prob.unsqueeze(0)
-                        prob_row = prob.unsqueeze(1)
-                        kl_div_matrix = nn.functional.kl_div(prob_line,
-                                                             prob_row,
-                                                             reduction='none',
-                                                             log_target=True) + \
-                                        nn.functional.kl_div(prob_row,
-                                                             prob_line,
-                                                             reduction='none',
-                                                             log_target=True)
-                        kl_div_matrix = kl_div_matrix.sum(2)
+            outputs_device = outputs_classes.device
 
-                        X_min = (outputs_coords_one2one[lvl, b, :, 0] - outputs_coords_one2one[lvl, b, :, 2]).detach()
-                        Y_min = (outputs_coords_one2one[lvl, b, :, 1] - outputs_coords_one2one[lvl, b, :, 3]).detach()
-                        X_max = (outputs_coords_one2one[lvl, b, :, 0] + outputs_coords_one2one[lvl, b, :, 2]).detach()
-                        Y_max = (outputs_coords_one2one[lvl, b, :, 0] + outputs_coords_one2one[lvl, b, :, 3]).detach()
-                        
-                        X_intersection_min = torch.max(X_min.unsqueeze(0), X_min.unsqueeze(1))
-                        Y_intersection_min = torch.max(Y_min.unsqueeze(0), Y_min.unsqueeze(1))
-                        X_intersection_max = torch.min(X_max.unsqueeze(0), X_max.unsqueeze(1))
-                        Y_intersection_max = torch.min(Y_max.unsqueeze(0), Y_max.unsqueeze(1))
+            n_lvls, bs, n_q, n_cls = outputs_classes.shape
+            predictions_clusters = []
+            with torch.no_grad():
+                classes_index = outputs_classes.argmax(dim=3)
+                classes_same_matrix = (classes_index.unsqueeze(2) == classes_index.unsqueeze(3))
+                del classes_index
+                torch.cuda.empty_cache()
 
-                        intersection_width = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
-                        intersection_height = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
-                        intersection_area = intersection_width * intersection_height
+                box_area = outputs_coords[:, :, :, 2] * outputs_coords[:, :, :, 3]
 
-                        box_area = (X_max - X_min) * (Y_max - Y_min)
-                        union_area = (box_area.unsqueeze(0) + box_area.unsqueeze(1) - intersection_area)
-                        iou_matrix = intersection_area / (union_area + 1e-6)
+                X_min = (outputs_coords[:, :, :, 0] - 0.5*outputs_coords[:, :, :, 2]).detach()
+                Y_min = (outputs_coords[:, :, :, 1] - 0.5*outputs_coords[:, :, :, 3]).detach()
+                X_max = (outputs_coords[:, :, :, 0] + 0.5*outputs_coords[:, :, :, 2]).detach()
+                Y_max = (outputs_coords[:, :, :, 1] + 0.5*outputs_coords[:, :, :, 3]).detach()
+                
+                X_intersection_min = torch.max(X_min.unsqueeze(2), X_min.unsqueeze(3))
+                Y_intersection_min = torch.max(Y_min.unsqueeze(2), Y_min.unsqueeze(3))
+                X_intersection_max = torch.min(X_max.unsqueeze(2), X_max.unsqueeze(3))
+                Y_intersection_max = torch.min(Y_max.unsqueeze(2), Y_max.unsqueeze(3))
+                del X_min
+                del Y_min
+                del X_max
+                del Y_max
+                torch.cuda.empty_cache()
 
-                        merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) * (iou_matrix > torch.tensor(self.iou_threshold))
-                        triangular_matrix = torch.arange(n_q).unsqueeze(0) > torch.arange(n_q).unsqueeze(1)
-                        merge_mask = merge_mask*triangular_matrix.to(outputs_device)
+                intersection_width = torch.max(torch.zeros([n_lvls, bs, n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
+                intersection_height = torch.max(torch.zeros([n_lvls, bs, n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
+                del X_intersection_min
+                del Y_intersection_min
+                del X_intersection_max
+                del Y_intersection_max
+                torch.cuda.empty_cache()
 
-                        predictions_clusters_this_image = [[i] for i in range(n_q)]
-                        # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
-                        index_nonezero = torch.nonzero(merge_mask, as_tuple=True)
-                        for i in range(len(index_nonezero[0])):
-                            line_index = index_nonezero[0][i].item()
-                            if predictions_clusters_this_image[line_index] is not None:
-                                predictions_clusters_this_image[line_index].append(index_nonezero[1][i].item())
-                                predictions_clusters_this_image[index_nonezero[1][i].item()] = None
-                        predictions_clusters_this_level.append(predictions_clusters_this_image)
-                    predictions_clusters.append(predictions_clusters_this_level)
+                intersection_area = intersection_width * intersection_height
+                del intersection_width
+                del intersection_height
+                torch.cuda.empty_cache()
 
-                outputs_classes_one2one_merged = torch.zeros([n_lvls, bs, n_q, n_cls])
-                outputs_coords_one2one_merged = torch.zeros([n_lvls, bs, n_q, 4])
-                for lvl in range(n_lvls):
-                    for b in range(bs):
-                        for i in range(n_q):
-                            predictions = predictions_clusters[lvl][b][i]
-                            if predictions is not None:
-                                predictions_classes_mean = torch.stack([outputs_classes_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
-                                predictions_coords_mean = torch.stack([outputs_coords_one2one[lvl][b][predictions[j]] for j in range(len(predictions))])
-                                predictions_classes_mean = predictions_classes_mean.mean(dim=0)
-                                predictions_coords_mean = predictions_coords_mean.mean(dim=0)
-                                outputs_classes_one2one_merged[lvl][b][i] = predictions_classes_mean
-                                outputs_coords_one2one_merged[lvl][b][i] = predictions_coords_mean
+                union_area = (box_area.unsqueeze(2) + box_area.unsqueeze(3) - intersection_area)
+                iou_matrix = intersection_area / (union_area + 1e-6)
+                del box_area
+                del union_area
+                del intersection_area
+                torch.cuda.empty_cache()
 
-                # merge: one2many predictions
-                n_lvls, bs, n_q, n_cls = outputs_classes_one2many.shape
-                predictions_clusters = []
-                for lvl in range(n_lvls):
-                    predictions_clusters_this_level = []
-                    for b in range(bs):
-                        prob = outputs_classes_one2many[lvl, b].sigmoid().detach()
-                        prob_line = prob.unsqueeze(0)
-                        prob_row = prob.unsqueeze(1)
-                        kl_div_matrix = nn.functional.kl_div(prob_line,
-                                                             prob_row,
-                                                             reduction='none',
-                                                             log_target=True) + \
-                                        nn.functional.kl_div(prob_row,
-                                                             prob_line,
-                                                             reduction='none',
-                                                             log_target=True)
-                        kl_div_matrix = kl_div_matrix.sum(2)
+                merge_mask = classes_same_matrix & (iou_matrix > torch.tensor(self.iou_threshold))
+                triangular_matrix = (torch.arange(n_q).unsqueeze(0) >= torch.arange(n_q).unsqueeze(1))[None, None]
+                merge_mask = merge_mask & triangular_matrix.to(outputs_device)
+                del classes_same_matrix
+                del iou_matrix
+                del triangular_matrix
+                torch.cuda.empty_cache()
+                
+                # merge_mask: shape=[n_levels, batch_size, n_queries, n_queries]
+                eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device)[None, None]
+                for i in range(n_q):
+                    merge_mask = (~(merge_mask ^ eye)[:, :, i, :].unsqueeze(3)) & merge_mask
+                valid_cluster_mask = merge_mask.any(dim=3)
+                merge_mask = merge_mask.to(torch.float)
+            
+            max_num_cluster = torch.max(valid_cluster_mask.sum(dim=2).flatten()).item()
+            print(max_num_cluster)
+            outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
+            outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
 
-                        X_min = (outputs_coords_one2many[lvl, b, :, 0] - outputs_coords_one2many[lvl, b, :, 2]).detach()
-                        Y_min = (outputs_coords_one2many[lvl, b, :, 1] - outputs_coords_one2many[lvl, b, :, 3]).detach()
-                        X_max = (outputs_coords_one2many[lvl, b, :, 0] + outputs_coords_one2many[lvl, b, :, 2]).detach()
-                        Y_max = (outputs_coords_one2many[lvl, b, :, 0] + outputs_coords_one2many[lvl, b, :, 3]).detach()
-                        
-                        X_intersection_min = torch.max(X_min.unsqueeze(0), X_min.unsqueeze(1))
-                        Y_intersection_min = torch.max(Y_min.unsqueeze(0), Y_min.unsqueeze(1))
-                        X_intersection_max = torch.min(X_max.unsqueeze(0), X_max.unsqueeze(1))
-                        Y_intersection_max = torch.min(Y_max.unsqueeze(0), Y_max.unsqueeze(1))
-
-                        intersection_width = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
-                        intersection_height = torch.max(torch.zeros([n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
-                        intersection_area = intersection_width * intersection_height
-
-                        box_area = (X_max - X_min) * (Y_max - Y_min)
-                        union_area = (box_area.unsqueeze(0) + box_area.unsqueeze(1) - intersection_area)
-                        iou_matrix = intersection_area / (union_area + 1e-6)
-
-                        merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) * (iou_matrix > torch.tensor(self.iou_threshold))
-                        triangular_matrix = torch.arange(n_q).unsqueeze(0) > torch.arange(n_q).unsqueeze(1)
-                        merge_mask = merge_mask*triangular_matrix.to(outputs_device)
-
-                        predictions_clusters_this_image = [[i] for i in range(n_q)]
-                        # predictions_clusters_this_image: [[0], [1], ..., [n_q - 1]]
-                        index_nonezero = torch.nonzero(merge_mask, as_tuple=True)
-                        for i in range(len(index_nonezero[0])):
-                            line_index = index_nonezero[0][i].item()
-                            if predictions_clusters_this_image[line_index] is not None:
-                                predictions_clusters_this_image[line_index].append(index_nonezero[1][i].item())
-                                predictions_clusters_this_image[index_nonezero[1][i].item()] = None
-                        predictions_clusters_this_level.append(predictions_clusters_this_image)
-                    predictions_clusters.append(predictions_clusters_this_level)
-
-                outputs_classes_one2many_merged = torch.zeros([n_lvls, bs, n_q, n_cls])
-                outputs_coords_one2many_merged = torch.zeros([n_lvls, bs, n_q, 4])
-                for lvl in range(n_lvls):
-                    for b in range(bs):
-                        for i in range(n_q):
-                            predictions = predictions_clusters[lvl][b][i]
-                            if predictions is not None:
-                                predictions_classes_mean = torch.stack([outputs_classes_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
-                                predictions_coords_mean = torch.stack([outputs_coords_one2many[lvl][b][predictions[j]] for j in range(len(predictions))])
-                                predictions_classes_mean = predictions_classes_mean.mean(dim=0)
-                                predictions_coords_mean = predictions_coords_mean.mean(dim=0)
-                                outputs_classes_one2many_merged[lvl][b][i] = predictions_classes_mean
-                                outputs_coords_one2many_merged[lvl][b][i] = predictions_coords_mean
-
-                outputs_classes_one2one = outputs_classes_one2one_merged.to(outputs_device)
-                outputs_coords_one2one = outputs_coords_one2one_merged.to(outputs_device)
-                outputs_classes_one2many = outputs_classes_one2many_merged.to(outputs_device)
-                outputs_coords_one2many = outputs_coords_one2many_merged.to(outputs_device)
+            del merge_mask
+            del outputs_classes
+            del outputs_coords
+            torch.cuda.empty_cache()
+            
+            out = {
+                "pred_logits": outputs_classes_merged[-1],
+                "pred_boxes": outputs_coords_merged[-1],
+            }
+            if self.aux_loss:
+                out["aux_outputs"] = self._set_aux_loss(
+                    outputs_classes_merged, outputs_coords_merged
+                )
+        else:
+            out = {
+                "pred_logits": outputs_classes_one2one[-1],
+                "pred_boxes": outputs_coords_one2one[-1],
+                "pred_logits_one2many": outputs_classes_one2many[-1],
+                "pred_boxes_one2many": outputs_coords_one2many[-1],
+            }
+            if self.aux_loss:
+                out["aux_outputs"] = self._set_aux_loss(
+                    outputs_classes_one2one, outputs_coords_one2one
+                )
+                out["aux_outputs_one2many"] = self._set_aux_loss(
+                    outputs_classes_one2many, outputs_coords_one2many
+                )
         # ====== END MODIFIED - PREDICTIONS MERGE ======
-
-        out = {
-            "pred_logits": outputs_classes_one2one[-1],
-            "pred_boxes": outputs_coords_one2one[-1],
-            "pred_logits_one2many": outputs_classes_one2many[-1],
-            "pred_boxes_one2many": outputs_coords_one2many[-1],
-        }
-        if self.aux_loss:
-            out["aux_outputs"] = self._set_aux_loss(
-                outputs_classes_one2one, outputs_coords_one2one
-            )
-            out["aux_outputs_one2many"] = self._set_aux_loss(
-                outputs_classes_one2many, outputs_coords_one2many
-            )
 
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
@@ -501,49 +439,6 @@ class DeformableDETR(nn.Module):
             {"pred_logits": a, "pred_boxes": b}
             for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
         ]
-
-
-# ====== YYL MODIFIED - PREDICTIONS MERGE ======
-def gather_cluster(X:torch.Tensor, n_clusters:int, sim_func):
-    """ Gather a set of tensors into n clusters according to their similarity.
-
-    Input:
-    - X: Tensor, shape=[N, D], N tensors with D width
-    - n_clusters: int, number of clusters
-    - sim_func: A callable similarity function for tensors
-
-    Output:
-    - Tensor, shape=[n_clusters, N//n_clusters, D], gathered tensors' clusters
-    - Tensor, shape=[n_clusters, N//n_clusters], recording tensors' index in corresponding clusters
-    """
-    raise NotImplementedError('\'gather_cluster\' is not implemented yet')
-
-
-def get_IoU(bbox_1:torch.Tensor, bbox_2:torch.Tensor):
-    """Input:
-        - bbox_1/bbox_2: Tensor, shape=[4]
-    """
-    xmin1, ymin1, xmax1, ymax1 = bbox_1
-    xmin2, ymin2, xmax2, ymax2 = bbox_2
-
-    x_intersection_min = max(xmin1, xmin2)
-    y_intersection_min = max(ymin1, ymin2)
-    x_intersection_max = min(xmax1, xmax2)
-    y_intersection_max = min(ymax1, ymax2)
-
-    intersection_width = max(0, x_intersection_max - x_intersection_min)
-    intersection_height = max(0, y_intersection_max - y_intersection_min)
-    intersection_area = intersection_width * intersection_height
-
-    box1_area = (xmax1 - xmin1) * (ymax1 - ymin1)
-    box2_area = (xmax2 - xmin2) * (ymax2 - ymin2)
-
-    union_area = box1_area + box2_area - intersection_area
-
-    iou = intersection_area / union_area if union_area > 0 else 0
-
-    return iou
-# ====== END MODIFIED - PREDICTIONS MERGE ======
 
 
 class SetCriterion(nn.Module):
@@ -879,8 +774,7 @@ def build_quant(args):
         mixed_selection=args.mixed_selection,
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
         predictions_merge=args.predictions_merge,
-        lowest_number_predictions_one2one=args.lowest_number_predictions_one2one,
-        lowest_number_predictions_one2many=args.lowest_number_predictions_one2many
+        lowest_number_predictions=args.lowest_number_predictions
         # ====== END MODIFIED - PREDICTIONS MERGE ======
     )
     if args.masks:
