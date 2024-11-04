@@ -317,7 +317,7 @@ class DeformableDETR(nn.Module):
         # outputs_coords_one2many: shape=[n_levels, batch_size, n_queries_one2many, 4]
 
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        if self.predictions_merge:
+        if self.predictions_merge and self.training:
             outputs_classes = torch.concat([outputs_classes_one2one, outputs_classes_one2many], dim=2)
             outputs_coords = torch.concat([outputs_coords_one2one, outputs_coords_one2many], dim=2)
             del outputs_classes_one2one
@@ -329,7 +329,6 @@ class DeformableDETR(nn.Module):
             outputs_device = outputs_classes.device
 
             n_lvls, bs, n_q, n_cls = outputs_classes.shape
-            predictions_clusters = []
             with torch.no_grad():
                 classes_index = outputs_classes.argmax(dim=3)
                 classes_same_matrix = (classes_index.unsqueeze(2) == classes_index.unsqueeze(3))
@@ -385,11 +384,11 @@ class DeformableDETR(nn.Module):
                 eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device)[None, None]
                 for i in range(n_q):
                     merge_mask = (~(merge_mask ^ eye)[:, :, i, :].unsqueeze(3)) & merge_mask
-                valid_cluster_mask = merge_mask.any(dim=3)
+                outputs_valid_mask = merge_mask.any(dim=3)
                 merge_mask = merge_mask.to(torch.float)
             
-            max_num_cluster = torch.max(valid_cluster_mask.sum(dim=2).flatten()).item()
-            print(max_num_cluster)
+            # max_num_valid = torch.max(outputs_valid_mask.sum(dim=2).flatten()).item()
+            # print(max_num_valid)
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
 
@@ -399,12 +398,13 @@ class DeformableDETR(nn.Module):
             torch.cuda.empty_cache()
             
             out = {
+                "valid_mask": outputs_valid_mask[-1],
                 "pred_logits": outputs_classes_merged[-1],
                 "pred_boxes": outputs_coords_merged[-1],
             }
             if self.aux_loss:
                 out["aux_outputs"] = self._set_aux_loss(
-                    outputs_classes_merged, outputs_coords_merged
+                    outputs_classes_merged, outputs_coords_merged, outputs_valid_mask
                 )
         else:
             out = {
@@ -431,15 +431,23 @@ class DeformableDETR(nn.Module):
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord):
+
+    # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_valid_mask=None):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [
-            {"pred_logits": a, "pred_boxes": b}
-            for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
-        ]
-
+        if outputs_valid_mask is None:
+            return [
+                {"pred_logits": a, "pred_boxes": b}
+                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
+            ]
+        else:
+            return [
+                {"pred_logits": a, "pred_boxes": b, "valid_mask": c}
+                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], outputs_valid_mask[:-1])
+            ]
+    # ====== END MODIFIED - PREDICTIONS MERGE ======
 
 class SetCriterion(nn.Module):
     """ This class computes the loss for DETR.
@@ -470,6 +478,12 @@ class SetCriterion(nn.Module):
         """
         assert "pred_logits" in outputs
         src_logits = outputs["pred_logits"]
+        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+        if "valid_mask" in outputs.keys():
+            valid_mask = outputs["valid_mask"]
+        else:
+            valid_mask = None
+        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
 
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat(
@@ -499,6 +513,9 @@ class SetCriterion(nn.Module):
                 num_boxes,
                 alpha=self.focal_alpha,
                 gamma=2,
+                # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+                valid_mask=valid_mask
+                # ====== END MODIFIED - PREDICTIONS MERGE ======
             )
             * src_logits.shape[1]
         )

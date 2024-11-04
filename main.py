@@ -495,7 +495,7 @@ def main(args):
             sampler_train.set_epoch(epoch)
         mce_need = [args.epochs]
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        k_one2many = 0 if args.predictions_merge else args.k_one2many
+        k_one2many = 0 if args.predictions_merge else args.k_one2many # if predictions merge is used, one2many should be disabled
         train_stats = train_one_epoch(
             model,
             criterion,
