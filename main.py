@@ -539,6 +539,9 @@ def main(args):
             args.output_dir,
             args.distributed,
             use_wandb=args.use_wandb,
+            # ====== YYL MODIFIED - PREDICTIONS MERGE ======
+            predictions_merge=args.predictions_merge
+            # ====== END MODIFIED - PREDICTIONS MERGE ======
         )
 
         log_stats = {

@@ -222,10 +222,7 @@ def dice_loss(inputs, targets, num_boxes):
 
 
 def sigmoid_focal_loss(
-    inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2,
-    # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-    valid_mask = None # valid_mask: shape=[batch_size, num_queries], 0 and 1
-    # ====== END MODIFIED - PREDICTIONS MERGE ======
+    inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2
 ):
     """
     Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
@@ -244,10 +241,6 @@ def sigmoid_focal_loss(
     """
     prob = inputs.sigmoid()
     ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-    # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-    if valid_mask is not None:
-        ce_loss = torch.unsqueeze(valid_mask, dim=-1) * ce_loss
-    # ====== END MODIFIED - PREDICTIONS MERGE ======
     p_t = prob * targets + (1 - prob) * (1 - targets)
     loss = ce_loss * ((1 - p_t) ** gamma)
 

@@ -62,8 +62,8 @@ class DeformableDETR(nn.Module):
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
         predictions_merge=False,
         lowest_number_predictions = 50,
-        kl_div_threshold = 3e-7,
-        iou_threshold = 0.8
+        kl_div_threshold = 0.2,
+        iou_threshold = 0.9
         # ====== END MODIFIED - PREDICTIONS MERGE ======
     ):
         """ Initializes the model.
@@ -317,7 +317,7 @@ class DeformableDETR(nn.Module):
         # outputs_coords_one2many: shape=[n_levels, batch_size, n_queries_one2many, 4]
 
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        if self.predictions_merge and self.training:
+        if self.predictions_merge:
             outputs_classes = torch.concat([outputs_classes_one2one, outputs_classes_one2many], dim=2)
             outputs_coords = torch.concat([outputs_coords_one2one, outputs_coords_one2many], dim=2)
             del outputs_classes_one2one
@@ -330,81 +330,80 @@ class DeformableDETR(nn.Module):
 
             n_lvls, bs, n_q, n_cls = outputs_classes.shape
             with torch.no_grad():
-                classes_index = outputs_classes.argmax(dim=3)
-                classes_same_matrix = (classes_index.unsqueeze(2) == classes_index.unsqueeze(3))
-                del classes_index
-                torch.cuda.empty_cache()
+                kl_div_matrix = []
+                iou_matrix = []
+                for lvl in range(n_lvls):
+                    kl_div_matrix.append([])
+                    iou_matrix.append([])
+                    for b in range(bs):
+                        # calculate kl divergence
+                        prob = outputs_classes[lvl, b].softmax(-1).log().to(torch.float16)
+                        prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
+                        prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
+                        del prob
+                        torch.cuda.empty_cache()
+                        kl_div = F.kl_div(prob_row_unsqueeze, prob_col_unsqueeze, reduction='none', log_target=True) \
+                            + F.kl_div(prob_col_unsqueeze, prob_row_unsqueeze, reduction='none', log_target=True)
+                        del prob_row_unsqueeze
+                        del prob_col_unsqueeze
+                        torch.cuda.empty_cache()
+                        kl_div_sum = kl_div.sum(dim=-1)
+                        del kl_div
+                        torch.cuda.empty_cache()
+                        kl_div_matrix[lvl].append(kl_div_sum)
+                        # calculate iou
+                        iou_matrix[lvl].append(
+                            box_ops.box_iou(
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :]),
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :])
+                            )[0].to(torch.float16)
+                        )
+                    kl_div_matrix[lvl] = torch.stack(kl_div_matrix[lvl])
+                    iou_matrix[lvl] = torch.stack(iou_matrix[lvl])
+                kl_div_matrix = torch.stack(kl_div_matrix)
+                iou_matrix = torch.stack(iou_matrix)
 
-                box_area = outputs_coords[:, :, :, 2] * outputs_coords[:, :, :, 3]
-
-                X_min = (outputs_coords[:, :, :, 0] - 0.5*outputs_coords[:, :, :, 2]).detach()
-                Y_min = (outputs_coords[:, :, :, 1] - 0.5*outputs_coords[:, :, :, 3]).detach()
-                X_max = (outputs_coords[:, :, :, 0] + 0.5*outputs_coords[:, :, :, 2]).detach()
-                Y_max = (outputs_coords[:, :, :, 1] + 0.5*outputs_coords[:, :, :, 3]).detach()
-                
-                X_intersection_min = torch.max(X_min.unsqueeze(2), X_min.unsqueeze(3))
-                Y_intersection_min = torch.max(Y_min.unsqueeze(2), Y_min.unsqueeze(3))
-                X_intersection_max = torch.min(X_max.unsqueeze(2), X_max.unsqueeze(3))
-                Y_intersection_max = torch.min(Y_max.unsqueeze(2), Y_max.unsqueeze(3))
-                del X_min
-                del Y_min
-                del X_max
-                del Y_max
-                torch.cuda.empty_cache()
-
-                intersection_width = torch.max(torch.zeros([n_lvls, bs, n_q, n_q]).to(outputs_device), X_intersection_max - X_intersection_min)
-                intersection_height = torch.max(torch.zeros([n_lvls, bs, n_q, n_q]).to(outputs_device), Y_intersection_max - Y_intersection_min)
-                del X_intersection_min
-                del Y_intersection_min
-                del X_intersection_max
-                del Y_intersection_max
-                torch.cuda.empty_cache()
-
-                intersection_area = intersection_width * intersection_height
-                del intersection_width
-                del intersection_height
-                torch.cuda.empty_cache()
-
-                union_area = (box_area.unsqueeze(2) + box_area.unsqueeze(3) - intersection_area)
-                iou_matrix = intersection_area / (union_area + 1e-6)
-                del box_area
-                del union_area
-                del intersection_area
-                torch.cuda.empty_cache()
-
-                merge_mask = classes_same_matrix & (iou_matrix > torch.tensor(self.iou_threshold))
-                triangular_matrix = (torch.arange(n_q).unsqueeze(0) >= torch.arange(n_q).unsqueeze(1))[None, None]
-                merge_mask = merge_mask & triangular_matrix.to(outputs_device)
-                del classes_same_matrix
+                # calculate merge mask
+                triangular_matrix = (torch.arange(n_q).unsqueeze(0) >= torch.arange(n_q).unsqueeze(1)).to(outputs_device)[None, None]
+                merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) \
+                    * (iou_matrix > torch.tensor(self.iou_threshold)) * triangular_matrix
+                del kl_div_matrix
                 del iou_matrix
                 del triangular_matrix
                 torch.cuda.empty_cache()
                 
                 # merge_mask: shape=[n_levels, batch_size, n_queries, n_queries]
+                # update merge mask iteratively to generate final merge mask
                 eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device)[None, None]
                 for i in range(n_q):
                     merge_mask = (~(merge_mask ^ eye)[:, :, i, :].unsqueeze(3)) & merge_mask
-                outputs_valid_mask = merge_mask.any(dim=3)
-                merge_mask = merge_mask.to(torch.float)
+                merge_mask = merge_mask.to(torch.float).detach()
             
-            # max_num_valid = torch.max(outputs_valid_mask.sum(dim=2).flatten()).item()
-            # print(max_num_valid)
+            outputs_valid_mask = merge_mask.any(dim=3)
+            max_num_valid = torch.max(outputs_valid_mask.sum(dim=2).flatten()).item()
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
-
+            num_merged = merge_mask.sum(dim=3)
             del merge_mask
             del outputs_classes
             del outputs_coords
             torch.cuda.empty_cache()
+            sort_indices = torch.argsort(num_merged, dim=2, descending=True)[:,:,:self.lowest_number_predictions]
+            outputs_classes_merged_sorted = torch.gather(outputs_classes_merged, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, n_cls))
+            outputs_coords_merged_sorted = torch.gather(outputs_coords_merged, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, 4))
+            del sort_indices
+            del outputs_classes_merged
+            del outputs_coords_merged
+            torch.cuda.empty_cache()
             
             out = {
-                "valid_mask": outputs_valid_mask[-1],
-                "pred_logits": outputs_classes_merged[-1],
-                "pred_boxes": outputs_coords_merged[-1],
+                "pred_logits": outputs_classes_merged_sorted[-1],
+                "pred_boxes": outputs_coords_merged_sorted[-1],
+                "max_num_valid": max_num_valid
             }
             if self.aux_loss:
                 out["aux_outputs"] = self._set_aux_loss(
-                    outputs_classes_merged, outputs_coords_merged, outputs_valid_mask
+                    outputs_classes_merged_sorted, outputs_coords_merged_sorted
                 )
         else:
             out = {
@@ -431,23 +430,14 @@ class DeformableDETR(nn.Module):
         return out
 
     @torch.jit.unused
-
-    # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_valid_mask=None):
+    def _set_aux_loss(self, outputs_class, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        if outputs_valid_mask is None:
-            return [
-                {"pred_logits": a, "pred_boxes": b}
-                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
-            ]
-        else:
-            return [
-                {"pred_logits": a, "pred_boxes": b, "valid_mask": c}
-                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], outputs_valid_mask[:-1])
-            ]
-    # ====== END MODIFIED - PREDICTIONS MERGE ======
+        return [
+            {"pred_logits": a, "pred_boxes": b}
+            for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
+        ]
 
 class SetCriterion(nn.Module):
     """ This class computes the loss for DETR.
@@ -478,12 +468,6 @@ class SetCriterion(nn.Module):
         """
         assert "pred_logits" in outputs
         src_logits = outputs["pred_logits"]
-        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        if "valid_mask" in outputs.keys():
-            valid_mask = outputs["valid_mask"]
-        else:
-            valid_mask = None
-        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
 
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat(
@@ -513,9 +497,6 @@ class SetCriterion(nn.Module):
                 num_boxes,
                 alpha=self.focal_alpha,
                 gamma=2,
-                # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-                valid_mask=valid_mask
-                # ====== END MODIFIED - PREDICTIONS MERGE ======
             )
             * src_logits.shape[1]
         )
