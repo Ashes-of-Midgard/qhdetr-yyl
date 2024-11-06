@@ -142,8 +142,8 @@ def train_one_epoch(
             else:
                 loss_dict = criterion(outputs, targets)
 
-            if i % 10 == 0 and "max_num_valid" in outputs.keys():
-                print("Max num valid outputs:", outputs["max_num_valid"], "Min num valid outputs:", outputs["min_num_valid"])
+            if i % 10 == 0 and "max_num_occurance" in outputs.keys():
+                print("Max num merge occurance:", outputs["max_num_occurance"], "Min num merge occurance:", outputs["min_num_occurance"])
         weight_dict = criterion.weight_dict
        
         losses = sum(

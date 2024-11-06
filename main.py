@@ -495,7 +495,6 @@ def main(args):
             sampler_train.set_epoch(epoch)
         mce_need = [args.epochs]
         # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-        k_one2many = 0 if args.predictions_merge else args.k_one2many # if predictions merge is used, one2many should be disabled
         train_stats = train_one_epoch(
             model,
             criterion,
@@ -504,7 +503,7 @@ def main(args):
             device,
             epoch,
             args.clip_max_norm,
-            k_one2many=k_one2many,
+            k_one2many=args.k_one2many,
             lambda_one2many=args.lambda_one2many,
             use_wandb=args.use_wandb,
             use_fp16=args.use_fp16,

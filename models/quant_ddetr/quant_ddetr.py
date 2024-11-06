@@ -63,7 +63,7 @@ class DeformableDETR(nn.Module):
         predictions_merge=False,
         lowest_number_predictions = 50,
         kl_div_threshold = 0.2,
-        iou_threshold = 0.8
+        iou_threshold = 0.9
         # ====== END MODIFIED - PREDICTIONS MERGE ======
     ):
         """ Initializes the model.
@@ -337,7 +337,7 @@ class DeformableDETR(nn.Module):
                     iou_matrix.append([])
                     for b in range(bs):
                         # calculate kl divergence
-                        prob = outputs_classes[lvl, b].softmax(-1).log().to(torch.float16)
+                        prob = outputs_classes[lvl, b].sigmoid().log().to(torch.float16)
                         prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
                         prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
                         del prob
@@ -377,27 +377,23 @@ class DeformableDETR(nn.Module):
                 eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device)[None, None]
                 for i in range(n_q):
                     merge_mask = (~(merge_mask ^ eye)[:, :, i, :].unsqueeze(3)) & merge_mask
+                merge_mask = merge_mask | eye
                 merge_mask = merge_mask.to(torch.float).detach()
             
-            num_merged = merge_mask.sum(dim=3)
-            sort_indices = torch.argsort(num_merged, dim=2, descending=True)
-            merge_mask_sorted = torch.gather(merge_mask, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, n_q))
-            del num_merged
-            del sort_indices
-            del merge_mask
-            torch.cuda.empty_cache()
-            merge_mask = merge_mask_sorted
-            outputs_valid_mask = merge_mask.any(dim=3)
-            max_num_valid = torch.max(outputs_valid_mask.sum(dim=2).flatten()).item()
-            min_num_valid = torch.min(outputs_valid_mask.sum(dim=2).flatten()).item()
-            for lvl in range(n_lvls):
-                for b in range(bs):
-                    for i in range(self.lowest_number_predictions):
-                        if not outputs_valid_mask[lvl, b, i].item():
-                            merge_mask[lvl, b, i, i] = 1.0
-            del outputs_valid_mask
-            torch.cuda.empty_cache()
-            merge_mask = merge_mask[:,:,:self.lowest_number_predictions,:]
+                num_merged = merge_mask.sum(dim=3)
+                merge_occure_mask = num_merged > torch.tensor([[[1]]]).to(outputs_device)
+                max_num_occurance = torch.max(merge_occure_mask.sum(dim=2).flatten()).item()
+                min_num_occurance = torch.min(merge_occure_mask.sum(dim=2).flatten()).item()
+                del merge_occure_mask
+                sort_indices = torch.argsort(num_merged, dim=2, descending=True)
+                merge_mask_sorted = torch.gather(merge_mask, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, n_q))
+                del num_merged
+                del sort_indices
+                del merge_mask
+                torch.cuda.empty_cache()
+                merge_mask = merge_mask_sorted
+                torch.cuda.empty_cache()
+                
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             del merge_mask
@@ -406,14 +402,19 @@ class DeformableDETR(nn.Module):
             torch.cuda.empty_cache()
             
             out = {
-                "pred_logits": outputs_classes_merged[-1],
-                "pred_boxes": outputs_coords_merged[-1],
-                "max_num_valid": max_num_valid,
-                "min_num_valid": min_num_valid
+                "pred_logits": outputs_classes_merged[-1,:,:self.num_queries_one2one,:],
+                "pred_boxes": outputs_coords_merged[-1,:,:self.num_queries_one2one,:],
+                "pred_logits_one2many": outputs_classes_merged[-1,:,self.num_queries_one2one:,:],
+                "pred_boxes_one2many": outputs_coords_merged[-1,:,self.num_queries_one2one:,:],
+                "max_num_occurance": max_num_occurance,
+                "min_num_occurance": min_num_occurance
             }
             if self.aux_loss:
                 out["aux_outputs"] = self._set_aux_loss(
-                    outputs_classes_merged, outputs_coords_merged
+                    outputs_classes_merged[:,:,:self.num_queries_one2one,:], outputs_coords_merged[:,:,:self.num_queries_one2one,:]
+                )
+                out["aux_outputs_one2many"] = self._set_aux_loss(
+                    outputs_classes_merged[:,:,self.num_queries_one2one:,:], outputs_coords_merged[:,:,self.num_queries_one2one:,:]
                 )
         else:
             out = {
