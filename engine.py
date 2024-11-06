@@ -254,17 +254,17 @@ def evaluate(
 
     # pdb.set_trace()
     # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-    if not predictions_merge:
-        if distributed:
-            save_num_queries = model.module.num_queries
-            save_two_stage_num_proposals = model.module.transformer.two_stage_num_proposals
-            model.module.num_queries = model.module.num_queries_one2one
-            model.module.transformer.two_stage_num_proposals = model.module.num_queries
-        else:
-            save_num_queries = model.num_queries
-            save_two_stage_num_proposals = model.transformer.two_stage_num_proposals
-            model.num_queries = model.num_queries_one2one
-            model.transformer.two_stage_num_proposals = model.num_queries
+    # if not predictions_merge:
+    if distributed:
+        save_num_queries = model.module.num_queries
+        save_two_stage_num_proposals = model.module.transformer.two_stage_num_proposals
+        model.module.num_queries = model.module.num_queries_one2one
+        model.module.transformer.two_stage_num_proposals = model.module.num_queries
+    else:
+        save_num_queries = model.num_queries
+        save_two_stage_num_proposals = model.transformer.two_stage_num_proposals
+        model.num_queries = model.num_queries_one2one
+        model.transformer.two_stage_num_proposals = model.num_queries
     # ====== END MODIFIED - PREDICTIONS MERGE ======
 
 
@@ -374,13 +374,13 @@ def evaluate(
     
     # ====== YYL MODIFIED - PREDICTIONS MERGE ======
     # recover the model parameters for next training epoch
-    if not predictions_merge:
-        if distributed:
-            model.module.num_queries = save_num_queries
-            model.module.transformer.two_stage_num_proposals = save_two_stage_num_proposals
-        else:
-            model.num_queries = save_num_queries
-            model.transformer.two_stage_num_proposals = save_two_stage_num_proposals
+    # if not predictions_merge:
+    if distributed:
+        model.module.num_queries = save_num_queries
+        model.module.transformer.two_stage_num_proposals = save_two_stage_num_proposals
+    else:
+        model.num_queries = save_num_queries
+        model.transformer.two_stage_num_proposals = save_two_stage_num_proposals
     # ====== END MODIFIED - PREDICTIONS MERGE ======
 
     return stats, coco_evaluator
