@@ -380,7 +380,7 @@ class DeformableDETR(nn.Module):
                 merge_mask = merge_mask.to(torch.float).detach()
             
             num_merged = merge_mask.sum(dim=3)
-            sort_indices = torch.argsort(num_merged, dim=2, descending=True)[:,:,:self.lowest_number_predictions]
+            sort_indices = torch.argsort(num_merged, dim=2, descending=True)
             merge_mask_sorted = torch.gather(merge_mask, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, n_q))
             del num_merged
             del sort_indices
@@ -397,6 +397,7 @@ class DeformableDETR(nn.Module):
                             merge_mask[lvl, b, i, i] = 1.0
             del outputs_valid_mask
             torch.cuda.empty_cache()
+            merge_mask = merge_mask[:,:,:self.lowest_number_predictions,:]
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             del merge_mask
