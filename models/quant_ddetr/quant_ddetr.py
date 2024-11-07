@@ -398,10 +398,17 @@ class DeformableDETR(nn.Module):
                     del sort_indices
                     del merge_mask
                     torch.cuda.empty_cache()
+
+                    if max_num_occurance == 0:
+                        # when exiting the iteration, all the invalid line in merge mask should be padded with 1 diagonal elements
+                        merge_mask = (merge_mask_sorted | eye).to(torch.float).detach()
+                        del merge_mask_sorted
+                        torch.cuda.empty_cache()
                     
-                    merge_mask = (merge_mask_sorted | eye).to(torch.float).detach()
-                    del merge_mask_sorted
-                    torch.cuda.empty_cache()
+                    else:
+                        merge_mask = merge_mask_sorted.to(torch.float).detach()
+                        del merge_mask_sorted
+                        torch.cuda.empty_cache()
                     
                 outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
                 outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
