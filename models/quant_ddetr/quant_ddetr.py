@@ -330,7 +330,7 @@ class DeformableDETR(nn.Module):
             outputs_device = outputs_classes.device
             n_lvls, bs, n_q, n_cls = outputs_classes.shape
             # Iteratively merge predictions until no predictions meets threshold
-            for t in range(100):
+            for t in range(6):
                 with torch.no_grad():
                     kl_div_matrix = []
                     iou_matrix = []
@@ -399,7 +399,7 @@ class DeformableDETR(nn.Module):
                     del merge_mask
                     torch.cuda.empty_cache()
 
-                    if max_num_occurance == 0:
+                    if max_num_occurance == 0 or t == 5:
                         # when exiting the iteration, all the invalid line in merge mask should be padded with 1 diagonal elements
                         merge_mask = (merge_mask_sorted | eye).to(torch.float).detach()
                         del merge_mask_sorted
