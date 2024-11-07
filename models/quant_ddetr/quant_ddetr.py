@@ -386,14 +386,6 @@ class DeformableDETR(nn.Module):
                 max_num_occurance = torch.max(merge_occure_mask.sum(dim=2).flatten()).item()
                 min_num_occurance = torch.min(merge_occure_mask.sum(dim=2).flatten()).item()
                 del merge_occure_mask
-                sort_indices = torch.argsort(num_merged, dim=2, descending=True)
-                merge_mask_sorted = torch.gather(merge_mask, 2, sort_indices.unsqueeze(-1).expand(-1, -1, -1, n_q))
-                del num_merged
-                del sort_indices
-                del merge_mask
-                torch.cuda.empty_cache()
-                merge_mask = merge_mask_sorted.to(torch.float).detach()
-                torch.cuda.empty_cache()
                 
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
             outputs_coords_merged = torch.matmul(merge_mask, outputs_coords) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
