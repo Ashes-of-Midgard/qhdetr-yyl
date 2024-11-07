@@ -494,7 +494,6 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         mce_need = [args.epochs]
-        # ====== YYL MODIFIED - PREDICTIONS MERGE ======
         train_stats = train_one_epoch(
             model,
             criterion,
@@ -510,7 +509,6 @@ def main(args):
             use_mec=args.mec_loss,      # for mce
             total_epochs=args.epochs   # for mce
         )
-        # ====== END MODIFIED - PREDICTIONS MERGE ======
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / "checkpoint.pth"]
@@ -538,9 +536,6 @@ def main(args):
             args.output_dir,
             args.distributed,
             use_wandb=args.use_wandb,
-            # ====== YYL MODIFIED - PREDICTIONS MERGE ======
-            predictions_merge=args.predictions_merge
-            # ====== END MODIFIED - PREDICTIONS MERGE ======
         )
 
         log_stats = {

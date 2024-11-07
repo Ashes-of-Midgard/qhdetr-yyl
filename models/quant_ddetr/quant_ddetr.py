@@ -249,6 +249,7 @@ class DeformableDETR(nn.Module):
         if not self.two_stage or self.mixed_selection:
             query_embeds = self.query_embed.weight[0 : self.num_queries, :]
             # query_embeds: Tensor, shape=[num_queries, d_model] or [num_queries, d_model*2]
+            # During evaluation, num_queries will be set to num_queries_one2one temporarily(see engine.py - evaluate)
 
         # make attn mask
         """ attention mask to prevent information leakage
@@ -260,6 +261,7 @@ class DeformableDETR(nn.Module):
         self_attn_mask[0 : self.num_queries_one2one, self.num_queries_one2one :,] = True
         # self_attn_mask: Tensor, shape=[num_queries, num_queries]
         # note: num_queries==num_queries_one2one + num_queries_one2many
+        # During evaluation, num_queries will be set to num_queries_one2one temporarily(see engine.py - evaluate)
         
         (
             hs,
@@ -378,7 +380,6 @@ class DeformableDETR(nn.Module):
                 for i in range(n_q):
                     merge_mask = (~(merge_mask ^ eye)[:, :, i, :].unsqueeze(3)) & merge_mask
                 merge_mask = merge_mask | eye
-                merge_mask = merge_mask.to(torch.float).detach()
             
                 num_merged = merge_mask.sum(dim=3)
                 merge_occure_mask = num_merged > torch.tensor([[[1]]]).to(outputs_device)
@@ -391,7 +392,7 @@ class DeformableDETR(nn.Module):
                 del sort_indices
                 del merge_mask
                 torch.cuda.empty_cache()
-                merge_mask = merge_mask_sorted
+                merge_mask = merge_mask_sorted.to(torch.float).detach()
                 torch.cuda.empty_cache()
                 
             outputs_classes_merged = torch.matmul(merge_mask, outputs_classes) / (merge_mask.sum(dim=3, keepdim=True)+1e-6)
@@ -402,19 +403,19 @@ class DeformableDETR(nn.Module):
             torch.cuda.empty_cache()
             
             out = {
-                "pred_logits": outputs_classes_merged[-1,:,:self.num_queries_one2one,:],
-                "pred_boxes": outputs_coords_merged[-1,:,:self.num_queries_one2one,:],
-                "pred_logits_one2many": outputs_classes_merged[-1,:,self.num_queries_one2one:,:],
-                "pred_boxes_one2many": outputs_coords_merged[-1,:,self.num_queries_one2one:,:],
+                "pred_logits": outputs_classes_merged[-1, :, :self.num_queries_one2one, :],
+                "pred_boxes": outputs_coords_merged[-1, :, :self.num_queries_one2one, :],
+                "pred_logits_one2many": outputs_classes_merged[-1, :, self.num_queries_one2one:, :],
+                "pred_boxes_one2many": outputs_coords_merged[-1, :, self.num_queries_one2one:, :],
                 "max_num_occurance": max_num_occurance,
                 "min_num_occurance": min_num_occurance
             }
             if self.aux_loss:
                 out["aux_outputs"] = self._set_aux_loss(
-                    outputs_classes_merged[:,:,:self.num_queries_one2one,:], outputs_coords_merged[:,:,:self.num_queries_one2one,:]
+                    outputs_classes_merged[:, :, :self.num_queries_one2one, :], outputs_coords_merged[:, :, :self.num_queries_one2one, :]
                 )
                 out["aux_outputs_one2many"] = self._set_aux_loss(
-                    outputs_classes_merged[:,:,self.num_queries_one2one:,:], outputs_coords_merged[:,:,self.num_queries_one2one:,:]
+                    outputs_classes_merged[:, :, self.num_queries_one2one:, :], outputs_coords_merged[:, :, self.num_queries_one2one:, :]
                 )
         else:
             out = {
