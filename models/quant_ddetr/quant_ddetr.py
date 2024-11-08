@@ -331,62 +331,74 @@ class DeformableDETR(nn.Module):
             outputs_device = outputs_classes.device
 
             n_lvls, bs, n_q, n_cls = outputs_classes.shape
-            with torch.no_grad():
-                kl_div_matrix = []
-                iou_matrix = []
-                for b in range(bs):
-                    # calculate kl divergence
-                    prob = outputs_classes[lvl, b].sigmoid().log().to(torch.float16)
-                    prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
-                    prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
-                    del prob
-                    torch.cuda.empty_cache()
-                    kl_div = F.kl_div(prob_row_unsqueeze, prob_col_unsqueeze, reduction='none', log_target=True) \
-                        + F.kl_div(prob_col_unsqueeze, prob_row_unsqueeze, reduction='none', log_target=True)
-                    del prob_row_unsqueeze
-                    del prob_col_unsqueeze
-                    torch.cuda.empty_cache()
-                    kl_div_sum = kl_div.sum(dim=-1)
-                    del kl_div
-                    torch.cuda.empty_cache()
-                    kl_div_matrix.append(kl_div_sum)
-                    # calculate iou
-                    iou_matrix.append(
-                        box_ops.box_iou(
-                            box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :]),
-                            box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :])
-                        )[0].to(torch.float16)
-                    )
-                kl_div_matrix = torch.stack(kl_div_matrix)
-                iou_matrix = torch.stack(iou_matrix)
+            # iteratively merging until no more predictions meet the threshold to merge
+            for t in range(6):
+                with torch.no_grad():
+                    kl_div_matrix = []
+                    iou_matrix = []
+                        
+                    for b in range(bs):
+                        # calculate kl divergence
+                        prob = outputs_classes[lvl, b].sigmoid().log().to(torch.float16)
+                        prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
+                        prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
+                        del prob
+                        torch.cuda.empty_cache()
+                        kl_div = F.kl_div(prob_row_unsqueeze, prob_col_unsqueeze, reduction='none', log_target=True) \
+                            + F.kl_div(prob_col_unsqueeze, prob_row_unsqueeze, reduction='none', log_target=True)
+                        del prob_row_unsqueeze
+                        del prob_col_unsqueeze
+                        torch.cuda.empty_cache()
+                        kl_div_sum = kl_div.sum(dim=-1)
+                        del kl_div
+                        torch.cuda.empty_cache()
+                        kl_div_matrix.append(kl_div_sum)
+                        # calculate iou
+                        iou_matrix.append(
+                            box_ops.box_iou(
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :]),
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :])
+                            )[0].to(torch.float16)
+                        )
+                    kl_div_matrix = torch.stack(kl_div_matrix)
+                    iou_matrix = torch.stack(iou_matrix)
 
-                # calculate merge mask
-                triangular_matrix = (torch.arange(n_q).unsqueeze(0) >= torch.arange(n_q).unsqueeze(1)).to(outputs_device).unsqueeze(0)
-                merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) \
-                    * (iou_matrix > torch.tensor(self.iou_threshold)) * triangular_matrix
-                del kl_div_matrix
-                del iou_matrix
-                del triangular_matrix
+                    # calculate merge mask
+                    triangular_matrix = (torch.arange(n_q).unsqueeze(0) >= torch.arange(n_q).unsqueeze(1)).to(outputs_device).unsqueeze(0)
+                    merge_mask = (kl_div_matrix < torch.tensor(self.kl_div_threshold)) \
+                        * (iou_matrix > torch.tensor(self.iou_threshold)) * triangular_matrix
+                    del kl_div_matrix
+                    del iou_matrix
+                    del triangular_matrix
+                    torch.cuda.empty_cache()
+                    
+                    # merge_mask: shape=[n_levels, batch_size, n_queries, n_queries]
+                    # update merge mask iteratively to generate final merge mask
+                    eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device).unsqueeze(0)
+                    for i in range(n_q):
+                        merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
+
+                    num_merged = merge_mask.sum(dim=2)
+                    merge_occure_mask = num_merged > torch.tensor(1)
+                    max_num_occurance = torch.max(merge_occure_mask.sum(dim=2).flatten()).item()
+                    min_num_occurance = torch.min(merge_occure_mask.sum(dim=2).flatten()).item()
+                    del merge_occure_mask
+                    del num_merged
+                    torch.cuda.empty_cache()
+
+                    if max_num_occurance == 0 or t == 5:
+                        # when exiting the iteration, all the invalid line in merge mask should be padded with 1 diagonal elements
+                        merge_mask = (merge_mask | eye).to(torch.float).detach()
+                    
+                    else:
+                        merge_mask = merge_mask.to(torch.float).detach()
+                    
+                outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
+                outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
+                del merge_mask
                 torch.cuda.empty_cache()
-                
-                # merge_mask: shape=[batch_size, n_queries, n_queries]
-                # update merge mask iteratively to generate final merge mask
-                eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device).unsqueeze(0)
-                for i in range(n_q):
-                    merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
-                merge_mask = (merge_mask | eye).to(torch.float)
-            
-                num_merged = merge_mask.sum(dim=2)
-                merge_occure_mask = num_merged > torch.tensor(1)
-                max_num_occurance = torch.max(merge_occure_mask.sum(dim=1).flatten()).item()
-                min_num_occurance = torch.min(merge_occure_mask.sum(dim=1).flatten()).item()
-                del merge_occure_mask
-                torch.cuda.empty_cache()
-                
-            outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
-            outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
-            del merge_mask
-            torch.cuda.empty_cache()
+                if max_num_occurance == 0:
+                    break
             
             out = {
                 "pred_logits": outputs_classes[-1, :, :self.num_queries_one2one, :],
