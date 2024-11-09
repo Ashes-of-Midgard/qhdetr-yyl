@@ -372,8 +372,8 @@ class DeformableDETR(nn.Module):
                 # merge_mask: shape=[batch_size, n_queries, n_queries]
                 # update merge mask iteratively to generate final merge mask
                 eye = torch.eye(n_q, dtype=torch.bool).to(outputs_device).unsqueeze(0)
-                for i in range(n_q):
-                    merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
+                # for i in range(n_q):
+                #    merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
                 merge_mask = (merge_mask | eye).to(torch.float)
             
                 num_merged = merge_mask.sum(dim=2)
