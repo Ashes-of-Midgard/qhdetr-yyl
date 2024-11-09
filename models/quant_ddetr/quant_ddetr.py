@@ -378,10 +378,16 @@ class DeformableDETR(nn.Module):
                     for i in range(n_q):
                         merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
 
+                    valid_mask = merge_mask.any(dim=2)
+                    max_num_valid = torch.max(valid_mask.sum(dim=1).flatten()).item()
+                    min_num_valid = torch.min(valid_mask.sum(dim=1).flatten()).item()
+                    del valid_mask
+                    torch.cuda.empty_cache()
+                    
                     num_merged = merge_mask.sum(dim=2)
                     merge_occure_mask = num_merged > torch.tensor(1)
-                    max_num_occurance = torch.max(merge_occure_mask.sum(dim=2).flatten()).item()
-                    min_num_occurance = torch.min(merge_occure_mask.sum(dim=2).flatten()).item()
+                    max_num_occurance = torch.max(merge_occure_mask.sum(dim=1).flatten()).item()
+                    min_num_occurance = torch.min(merge_occure_mask.sum(dim=1).flatten()).item()
                     del merge_occure_mask
                     del num_merged
                     torch.cuda.empty_cache()
@@ -406,7 +412,10 @@ class DeformableDETR(nn.Module):
                 "pred_logits_one2many": outputs_classes[-1, :, self.num_queries_one2one:, :],
                 "pred_boxes_one2many": outputs_coords[-1, :, self.num_queries_one2one:, :],
                 "max_num_occurance": max_num_occurance,
-                "min_num_occurance": min_num_occurance
+                "min_num_occurance": min_num_occurance,
+                "max_num_valid": max_num_valid,
+                "min_num_valid": min_num_valid,
+                "iteration_num": t
             }
             if self.aux_loss:
                 out["aux_outputs"] = self._set_aux_loss(
