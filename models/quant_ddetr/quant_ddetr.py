@@ -336,7 +336,7 @@ class DeformableDETR(nn.Module):
                 iou_matrix = []
                 for b in range(bs):
                     # calculate kl divergence
-                    prob = outputs_classes[lvl, b].sigmoid().log().to(torch.float16)
+                    prob = outputs_classes[-1, b].sigmoid().log().to(torch.float16)
                     prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
                     prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
                     del prob
@@ -353,8 +353,8 @@ class DeformableDETR(nn.Module):
                     # calculate iou
                     iou_matrix.append(
                         box_ops.box_iou(
-                            box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :]),
-                            box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :])
+                            box_ops.box_cxcywh_to_xyxy(outputs_coords[-1, b, :, :]),
+                            box_ops.box_cxcywh_to_xyxy(outputs_coords[-1, b, :, :])
                         )[0].to(torch.float16)
                     )
                 kl_div_matrix = torch.stack(kl_div_matrix)
