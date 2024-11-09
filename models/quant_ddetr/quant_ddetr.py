@@ -332,14 +332,14 @@ class DeformableDETR(nn.Module):
 
             n_lvls, bs, n_q, n_cls = outputs_classes.shape
             # iteratively merging until no more predictions meet the threshold to merge
-            for t in range(6):
+            for t in range(3):
                 with torch.no_grad():
                     kl_div_matrix = []
                     iou_matrix = []
                         
                     for b in range(bs):
                         # calculate kl divergence
-                        prob = outputs_classes[lvl, b].sigmoid().log().to(torch.float16)
+                        prob = outputs_classes[-1, b].sigmoid().log().to(torch.float16)
                         prob_row_unsqueeze = prob.unsqueeze(0).to(torch.float16)
                         prob_col_unsqueeze = prob.unsqueeze(1).to(torch.float16)
                         del prob
@@ -356,8 +356,8 @@ class DeformableDETR(nn.Module):
                         # calculate iou
                         iou_matrix.append(
                             box_ops.box_iou(
-                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :]),
-                                box_ops.box_cxcywh_to_xyxy(outputs_coords[lvl, b, :, :])
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[-1, b, :, :]),
+                                box_ops.box_cxcywh_to_xyxy(outputs_coords[-1, b, :, :])
                             )[0].to(torch.float16)
                         )
                     kl_div_matrix = torch.stack(kl_div_matrix)
@@ -389,15 +389,20 @@ class DeformableDETR(nn.Module):
                     max_num_occurance = torch.max(merge_occure_mask.sum(dim=1).flatten()).item()
                     min_num_occurance = torch.min(merge_occure_mask.sum(dim=1).flatten()).item()
                     del merge_occure_mask
-                    del num_merged
                     torch.cuda.empty_cache()
 
-                    if max_num_occurance == 0 or t == 5:
+                    if max_num_occurance == 0 or t == 2:
                         # when exiting the iteration, all the invalid line in merge mask should be padded with 1 diagonal elements
                         merge_mask = (merge_mask | eye).to(torch.float).detach()
                     
                     else:
                         merge_mask = merge_mask.to(torch.float).detach()
+
+                    sort_indices = torch.argsort(num_merged, dim=1, descending=True)
+                    merge_mask = torch.gather(merge_mask, 1, sort_indices.unsqueeze(-1).expand(-1, -1, n_q))
+                    del num_merged
+                    del sort_indices
+                    torch.cuda.empty_cache()
                     
                 outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
                 outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
