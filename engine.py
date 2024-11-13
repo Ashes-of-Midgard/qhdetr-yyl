@@ -25,6 +25,10 @@ from datasets.data_prefetcher import data_prefetcher
 import pdb
 import numpy as np
 
+##### PREDICTIONS MERGE MODIFIED ######
+from datasets.coco import unnormalize, pil_transform_back, draw_boxes_on_image
+##### END MODIFIED ######
+
 scaler = torch.cuda.amp.GradScaler()
 
 def lamda_scheduler(start_warmup_value, base_value, epochs, niter_per_ep, warmup_epochs=5):
@@ -283,11 +287,20 @@ def evaluate(
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
 
+    t = 0
+    
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         outputs = model(samples)
+
+        # ablation draw
+        predictions_to_be_merged = outputs["pred_boxes_ori"][outputs["merge_occure_mask"]]
+        predictions_merged = torch.concat(outputs["pred_boxes"], outputs["pred_boxes_one2many"], dim=1)[outputs["merge_occure_mask"]]
+        ori_image = pil_transform_back(unnormalize(samples[0]))
+        draw_boxes_on_image(ori_image, predictions_to_be_merged, predictions_merged, save_path=f"ablation/{t}.png")
+
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
