@@ -301,6 +301,8 @@ def evaluate(
         outputs = model(samples)
 
         loss_dict = criterion(outputs, targets)
+        pred_boxes_ori = loss_dict.pop("pred_boxes_ori")
+        pred_boxes_merged = loss_dict.pop("pred_boxes_merged")
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
 
@@ -314,6 +316,23 @@ def evaluate(
             print("kl_div_ori", kl_div_ori)
             print("iou_merged", iou_merged)
             print("iou_ori", iou_ori)
+            # draw fig
+            boxes_ori_all = {}
+            boxes_merged_all = {}
+            for k in range(len(pred_boxes_ori)):
+                batch = pred_boxes_ori[k][0]
+                if batch in boxes_ori_all.keys():
+                    boxes_ori_all[batch].append(pred_boxes_ori[k][1])
+                    boxes_merged_all[batch].append(pred_boxes_merged[k][1])
+                else:
+                    boxes_ori_all[batch] = []
+                    boxes_merged_all[batch] = []
+            for batch in boxes_ori_all.keys():
+                boxes_ori_all[batch] = torch.concat(boxes_ori_all[batch])
+                boxes_merged_all[batch] = torch.concat(boxes_merged_all[batch])
+                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_ori_all[batch], save_path=f"exps/ablatins/{t}_ori.png")
+                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_merged_all[batch], bbox1_c="red", save_path=f"exps/ablatins/{t}_merged.png")
+                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_ori_all[batch], boxes_merged_all[batch], save_path=f"exps/ablatins/{t}_all.png")
         t += 1
 
         weight_dict = criterion.weight_dict

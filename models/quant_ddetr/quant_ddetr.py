@@ -749,18 +749,19 @@ class SetCriterion(nn.Module):
                 losses.update(l_dict)
 
         # ablation loss calculation
+        losses["pred_boxes_ori"] = []
+        losses["pred_boxes_merged"] = []
         ori_outputs = outputs["ori_outputs"]
         indices_merged = self.matcher(outputs_without_aux, targets)
         indices_ori = self.matcher(ori_outputs, targets)
-        #for batch in range(len(indices_merged)):
-        #    merge_mask = outputs["merge_mask"][batch]
-        #    for index in indices_merged[batch][0]:
-        #        if merge_mask[index].sum().item() > 1:
-        #            pred_boxes_ori = torch.concat([ori_outputs["pred_boxes"][batch], ori_outputs["pred_boxes_one2many"][batch]])
-        #            pred_boxes_merged = torch.concat([outputs["pred_boxes"][batch], outputs["pred_boxes_one2many"][batch]])
-        #            print(pred_boxes_ori[merge_mask[index]>0])
-        #            print(pred_boxes_merged[merge_mask[index]>0])
-        #            raise KeyboardInterrupt()
+        for batch in range(len(indices_merged)):
+            merge_mask = outputs["merge_mask"][batch]
+            for index in indices_merged[batch][0]:
+                if merge_mask[index].sum().item() > 1:
+                    pred_boxes_ori = torch.concat([ori_outputs["pred_boxes"][batch], ori_outputs["pred_boxes_one2many"][batch]])
+                    pred_boxes_merged = torch.concat([outputs["pred_boxes"][batch], outputs["pred_boxes_one2many"][batch]])
+                    losses["pred_boxes_ori"].append((batch, pred_boxes_ori[merge_mask[index] > 0][:1]))
+                    losses["pred_boxes_merged"].append((batch, pred_boxes_merged[merge_mask[index] > 0]))
         kl_div_merged = self.kl_div_loss(outputs_without_aux, targets, indices_merged, num_boxes)
         kl_div_ori = self.kl_div_loss(ori_outputs, targets, indices_ori, num_boxes)
         iou_merged = self.loss_iou(outputs_without_aux, targets, indices_merged, num_boxes)
