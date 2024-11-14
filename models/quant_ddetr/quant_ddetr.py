@@ -380,9 +380,12 @@ class DeformableDETR(nn.Module):
                 merge_occure_mask = num_merged > torch.tensor(1)
                 max_num_occurance = torch.max(merge_occure_mask.sum(dim=1).flatten()).item()
                 min_num_occurance = torch.min(merge_occure_mask.sum(dim=1).flatten()).item()
-                del merge_occure_mask
-                torch.cuda.empty_cache()
+                # del merge_occure_mask
+                # torch.cuda.empty_cache()
                 
+            outputs_classes_ori = outputs_classes[-1]
+            outputs_coords_ori = outputs_coords[-1]
+            
             outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
             outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
             del merge_mask
@@ -393,6 +396,9 @@ class DeformableDETR(nn.Module):
                 "pred_boxes": outputs_coords[-1, :, :self.num_queries_one2one, :],
                 "pred_logits_one2many": outputs_classes[-1, :, self.num_queries_one2one:, :],
                 "pred_boxes_one2many": outputs_coords[-1, :, self.num_queries_one2one:, :],
+                "pred_logits_ori": outputs_classes_ori,
+                "pred_boxes_ori": outputs_coords_ori,
+                "merge_occure_mask": merge_occure_mask,
                 "max_num_occurance": max_num_occurance,
                 "min_num_occurance": min_num_occurance
             }
