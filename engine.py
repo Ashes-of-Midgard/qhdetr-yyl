@@ -308,6 +308,11 @@ def evaluate(
         kl_div_ori += loss_dict_reduced.pop("kl_div_ori").item()
         iou_merged += loss_dict_reduced.pop("iou_merged").item()
         iou_ori += loss_dict_reduced.pop("iou_ori").item()
+        if t % 10 == 0:
+            print("kl_div_merged", kl_div_merged)
+            print("kl_div_ori", kl_div_ori)
+            print("iou_merged", iou_merged)
+            print("iou_ori", iou_ori)
         t += 1
 
         weight_dict = criterion.weight_dict

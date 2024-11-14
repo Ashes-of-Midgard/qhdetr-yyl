@@ -539,10 +539,19 @@ class SetCriterion(nn.Module):
             device=src_logits.device,
         )
         target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+        # target_classes_onehot: shape=[batch_size, num_queries, num_classes+1]
 
-        target_classes_onehot = target_classes_onehot(target_classes_onehot[:, :,-1]<torch.tensor(1))[:,:,-1]
-        kl_div = F.kl_div(src_logits, target_classes_o) + F.kl_div(target_classes_o, src_logits)
-        return kl_div
+        kl_div = 0
+        for batch in range(len(target_classes_onehot)):
+            condition = target_classes_onehot[batch, :, -1]<torch.tensor(1)
+            target_classes_onehot_no_empty = target_classes_onehot[batch][condition][:,:-1].sigmoid().log()
+            src_logits_corresponding = src_logits[batch][condition].sigmoid().log()
+            kl_div += F.kl_div(src_logits_corresponding, target_classes_onehot_no_empty, log_target=True) \
+                    + F.kl_div(target_classes_onehot_no_empty, src_logits_corresponding, log_target=True)
+        kl_div /= len(target_classes_onehot)
+        if math.isnan(kl_div.item()):
+            kl_div = torch.tensor(0).to(target_classes_onehot.device)
+        return kl_div        
 
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
@@ -598,7 +607,7 @@ class SetCriterion(nn.Module):
         )
 
         iou = torch.diag(
-            box_ops.box_iou(
+            box_ops.generalized_box_iou(
                 box_ops.box_cxcywh_to_xyxy(src_boxes),
                 box_ops.box_cxcywh_to_xyxy(target_boxes),
             )
@@ -745,11 +754,11 @@ class SetCriterion(nn.Module):
         kl_div_merged = self.kl_div_loss(outputs_without_aux, targets, indices_merged, num_boxes)
         kl_div_ori = self.kl_div_loss(ori_outputs, targets, indices_ori, num_boxes)
         iou_merged = self.loss_iou(outputs_without_aux, targets, indices_merged, num_boxes)
-        iou_ori = self.loss_iou(ori_outputs, targets, indices, num_boxes)
-        loss["kl_div_merged"] = kl_div_merged
-        loss["kl_div_ori"] = kl_div_ori
-        loss["iou_merged"] = iou_merged
-        loss["iou_ori"] = iou_ori
+        iou_ori = self.loss_iou(ori_outputs, targets, indices_ori, num_boxes)
+        losses["kl_div_merged"] = kl_div_merged
+        losses["kl_div_ori"] = kl_div_ori
+        losses["iou_merged"] = iou_merged
+        losses["iou_ori"] = iou_ori
         return losses
 
 
