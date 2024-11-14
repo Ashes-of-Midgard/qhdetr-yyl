@@ -375,7 +375,7 @@ class DeformableDETR(nn.Module):
                 for i in range(n_q):
                     merge_mask = (~(merge_mask ^ eye)[:, i, :].unsqueeze(2)) & merge_mask
                 merge_mask = (merge_mask | eye).to(torch.float)
-            
+                            
                 num_merged = merge_mask.sum(dim=2)
                 merge_occure_mask = num_merged > torch.tensor(1)
                 max_num_occurance = torch.max(merge_occure_mask.sum(dim=1).flatten()).item()
@@ -383,8 +383,8 @@ class DeformableDETR(nn.Module):
                 # del merge_occure_mask
                 # torch.cuda.empty_cache()
                 
-            outputs_classes_ori = outputs_classes[-1]
-            outputs_coords_ori = outputs_coords[-1]
+            outputs_classes_ori = outputs_classes[-1].clone().detach()
+            outputs_coords_ori = outputs_coords[-1].clone().detach()
             
             outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
             outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
@@ -406,8 +406,10 @@ class DeformableDETR(nn.Module):
                     outputs_classes[:, :, self.num_queries_one2one:, :], outputs_coords[:, :, self.num_queries_one2one:, :]
                 )
             out["ori_outputs"] = {
-                "pred_logits": outputs_classes_ori,
-                "pred_boxes":outputs_coords_ori,
+                    "pred_logits": outputs_classes_ori[:, :self.num_queries_one2one, :],
+                    "pred_boxes":outputs_coords_ori[:, :self.num_queries_one2one, :],
+                    "pred_logits_one2many": outputs_classes_ori[:, self.num_queries_one2one:, :],
+                    "pred_boxes_one2many":outputs_coords_ori[:, self.num_queries_one2one:, :],
             }
         else:
             out = {
@@ -544,10 +546,9 @@ class SetCriterion(nn.Module):
         kl_div = 0
         for batch in range(len(target_classes_onehot)):
             condition = target_classes_onehot[batch, :, -1]<torch.tensor(1)
-            target_classes_onehot_no_empty = target_classes_onehot[batch][condition][:,:-1].sigmoid().log()
-            src_logits_corresponding = src_logits[batch][condition].sigmoid().log()
-            kl_div += F.kl_div(src_logits_corresponding, target_classes_onehot_no_empty, log_target=True) \
-                    + F.kl_div(target_classes_onehot_no_empty, src_logits_corresponding, log_target=True)
+            target_classes_onehot_no_empty = target_classes_onehot[batch][condition][:,:-1]
+            src_logits_corresponding = src_logits[batch][condition].softmax(dim=1).log()
+            kl_div += F.kl_div(src_logits_corresponding, target_classes_onehot_no_empty)
         kl_div /= len(target_classes_onehot)
         if math.isnan(kl_div.item()):
             kl_div = torch.tensor(0).to(target_classes_onehot.device)
@@ -751,6 +752,15 @@ class SetCriterion(nn.Module):
         ori_outputs = outputs["ori_outputs"]
         indices_merged = self.matcher(outputs_without_aux, targets)
         indices_ori = self.matcher(ori_outputs, targets)
+        #for batch in range(len(indices_merged)):
+        #    merge_mask = outputs["merge_mask"][batch]
+        #    for index in indices_merged[batch][0]:
+        #        if merge_mask[index].sum().item() > 1:
+        #            pred_boxes_ori = torch.concat([ori_outputs["pred_boxes"][batch], ori_outputs["pred_boxes_one2many"][batch]])
+        #            pred_boxes_merged = torch.concat([outputs["pred_boxes"][batch], outputs["pred_boxes_one2many"][batch]])
+        #            print(pred_boxes_ori[merge_mask[index]>0])
+        #            print(pred_boxes_merged[merge_mask[index]>0])
+        #            raise KeyboardInterrupt()
         kl_div_merged = self.kl_div_loss(outputs_without_aux, targets, indices_merged, num_boxes)
         kl_div_ori = self.kl_div_loss(ori_outputs, targets, indices_ori, num_boxes)
         iou_merged = self.loss_iou(outputs_without_aux, targets, indices_merged, num_boxes)

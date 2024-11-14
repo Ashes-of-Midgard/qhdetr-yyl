@@ -292,6 +292,7 @@ def evaluate(
     kl_div_ori = 0.
     iou_merged = 0.
     iou_ori = 0.
+    num_merged = 0
     
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
