@@ -388,17 +388,13 @@ class DeformableDETR(nn.Module):
             
             outputs_classes[-1] = torch.matmul(merge_mask, outputs_classes[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
             outputs_coords[-1] = torch.matmul(merge_mask, outputs_coords[-1]) / (merge_mask.sum(dim=2, keepdim=True)+1e-6)
-            del merge_mask
-            torch.cuda.empty_cache()
             
             out = {
                 "pred_logits": outputs_classes[-1, :, :self.num_queries_one2one, :],
                 "pred_boxes": outputs_coords[-1, :, :self.num_queries_one2one, :],
                 "pred_logits_one2many": outputs_classes[-1, :, self.num_queries_one2one:, :],
                 "pred_boxes_one2many": outputs_coords[-1, :, self.num_queries_one2one:, :],
-                "pred_logits_ori": outputs_classes_ori,
-                "pred_boxes_ori": outputs_coords_ori,
-                "merge_occure_mask": merge_occure_mask,
+                "merge_mask": merge_mask,
                 "max_num_occurance": max_num_occurance,
                 "min_num_occurance": min_num_occurance
             }
@@ -409,6 +405,10 @@ class DeformableDETR(nn.Module):
                 out["aux_outputs_one2many"] = self._set_aux_loss(
                     outputs_classes[:, :, self.num_queries_one2one:, :], outputs_coords[:, :, self.num_queries_one2one:, :]
                 )
+            out["ori_outputs"] = {
+                "pred_logits": outputs_classes_ori,
+                "pred_boxes":outputs_coords_ori,
+            }
         else:
             out = {
                 "pred_logits": outputs_classes_one2one[-1],
@@ -511,6 +511,39 @@ class SetCriterion(nn.Module):
             losses["class_error"] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
         return losses
 
+    def kl_div_loss(self, outputs, targets, indices, num_boxes, log=True):
+        """ Only used for ablation """
+        assert "pred_logits" in outputs
+        src_logits = outputs["pred_logits"]
+
+        idx = self._get_src_permutation_idx(indices)
+        # idx[0]: shape=[batch_size * min(num_queries, num_target_boxes)]
+        # idx[1]: shape=[batch_size * min(num_queries, num_target_boxes)]
+        target_classes_o = torch.cat(
+            [t["labels"][J] for t, (_, J) in zip(targets, indices)]
+        )
+        # target_classes_o: shape=[batch_size * min(num_queries, num_target_boxes)]
+        target_classes = torch.full(
+            src_logits.shape[:2],
+            self.num_classes,
+            dtype=torch.int64,
+            device=src_logits.device,
+        )
+        target_classes[idx] = target_classes_o
+        # target_classes: shape=[batch_size, num_queries]
+
+        target_classes_onehot = torch.zeros(
+            [src_logits.shape[0], src_logits.shape[1], src_logits.shape[2] + 1],
+            dtype=src_logits.dtype,
+            layout=src_logits.layout,
+            device=src_logits.device,
+        )
+        target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
+
+        target_classes_onehot = target_classes_onehot(target_classes_onehot[:, :,-1]<torch.tensor(1))[:,:,-1]
+        kl_div = F.kl_div(src_logits, target_classes_o) + F.kl_div(target_classes_o, src_logits)
+        return kl_div
+
     @torch.no_grad()
     def loss_cardinality(self, outputs, targets, indices, num_boxes):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
@@ -553,6 +586,25 @@ class SetCriterion(nn.Module):
         )
         losses["loss_giou"] = loss_giou.sum() / num_boxes
         return losses
+
+    def loss_iou(self, outputs, targets, indices, num_boxes):
+        """ Only used in ablation experiment """
+        assert "pred_boxes" in outputs
+        idx = self._get_src_permutation_idx(indices)
+        # pdb.set_trace()
+        src_boxes = outputs["pred_boxes"][idx]
+        target_boxes = torch.cat(
+            [t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0
+        )
+
+        iou = torch.diag(
+            box_ops.box_iou(
+                box_ops.box_cxcywh_to_xyxy(src_boxes),
+                box_ops.box_cxcywh_to_xyxy(target_boxes),
+            )
+        )
+        
+        return iou.sum() / num_boxes
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
@@ -625,7 +677,7 @@ class SetCriterion(nn.Module):
         outputs_without_aux = {
             k: v
             for k, v in outputs.items()
-            if k != "aux_outputs" and k != "enc_outputs"
+            if k != "aux_outputs" and k != "enc_outputs" and k != "ori_outputs"
         }
 
         # Retrieve the matching between the outputs of the last layer and the targets
@@ -686,6 +738,18 @@ class SetCriterion(nn.Module):
                 l_dict = {k + f"_enc": v for k, v in l_dict.items()}
                 losses.update(l_dict)
 
+        # ablation loss calculation
+        ori_outputs = outputs["ori_outputs"]
+        indices_merged = self.matcher(outputs_without_aux, targets)
+        indices_ori = self.matcher(ori_outputs, targets)
+        kl_div_merged = self.kl_div_loss(outputs_without_aux, targets, indices_merged, num_boxes)
+        kl_div_ori = self.kl_div_loss(ori_outputs, targets, indices_ori, num_boxes)
+        iou_merged = self.loss_iou(outputs_without_aux, targets, indices_merged, num_boxes)
+        iou_ori = self.loss_iou(ori_outputs, targets, indices, num_boxes)
+        loss["kl_div_merged"] = kl_div_merged
+        loss["kl_div_ori"] = kl_div_ori
+        loss["iou_merged"] = iou_merged
+        loss["iou_ori"] = iou_ori
         return losses
 
 

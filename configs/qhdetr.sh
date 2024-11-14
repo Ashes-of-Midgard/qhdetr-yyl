@@ -2,7 +2,7 @@
 
 set -x
 
-EXP_DIR=exps/12eps/300-1500
+EXP_DIR=exps/ablatins/
 PY_ARGS=${@:1}
 
 python -u main.py \

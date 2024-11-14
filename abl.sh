@@ -5,7 +5,7 @@
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 GPUS_PER_NODE=8 ./tools/run_dist_launch.sh 8 ./configs/qhdetr.sh \
     --coco_path ../datasets/coco2017 \
-    --resume ../models/checkpoint0009.pth \
+    --resume ../models/checkpoint0012.pth \
     --batch_size 1 \
     --eval
 # --resume ./checkpoint_437.pth 

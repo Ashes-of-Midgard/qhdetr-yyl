@@ -288,6 +288,10 @@ def evaluate(
         )
 
     t = 0
+    kl_div_merged = 0.
+    kl_div_ori = 0.
+    iou_merged = 0.
+    iou_ori = 0.
     
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
@@ -295,22 +299,19 @@ def evaluate(
 
         outputs = model(samples)
 
-        # ablation draw
-        if t % 10 == 0:
-            predictions_to_be_merged = outputs["pred_boxes_ori"][outputs["merge_occure_mask"]]
-            predictions_merged = torch.concat([outputs["pred_boxes"], outputs["pred_boxes_one2many"]], dim=1)[outputs["merge_occure_mask"]]
-            ori_image = pil_transform_back(samples.tensors[0])
-            draw_boxes_on_image(ori_image, predictions_to_be_merged, predictions_merged, save_path=f"ablation/{t}_all.png")
-            draw_boxes_on_image(ori_image, None, predictions_merged, save_path=f"ablation/{t}_merged.png")
-            draw_boxes_on_image(ori_image, predictions_to_be_merged, None, save_path=f"ablation/{t}_to_be_merged.png")
-            draw_boxes_on_image(ori_image, save_path=f"ablation/{t}_ori.png")
-        t += 1
-
         loss_dict = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
-
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
+
+        # ablation
+        kl_div_merged += loss_dict_reduced.pop("kl_div_merged").item()
+        kl_div_ori += loss_dict_reduced.pop("kl_div_ori").item()
+        iou_merged += loss_dict_reduced.pop("iou_merged").item()
+        iou_ori += loss_dict_reduced.pop("iou_ori").item()
+        t += 1
+
+        weight_dict = criterion.weight_dict
+
         loss_dict_reduced_scaled = {
             k: v * weight_dict[k]
             for k, v in loss_dict_reduced.items()
@@ -351,6 +352,16 @@ def evaluate(
                 res_pano[i]["file_name"] = file_name
 
             panoptic_evaluator.update(res_pano)
+
+    # ablation
+    kl_div_merged = kl_div_merged / t
+    kl_div_ori = kl_div_ori / t
+    iou_merged = iou_merged / t
+    iou_ori = iou_ori / t
+    print("kl_div_merged", kl_div_merged)
+    print("kl_div_ori", kl_div_ori)
+    print("iou_merged", iou_merged)
+    print("iou_ori", iou_ori)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

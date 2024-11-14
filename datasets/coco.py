@@ -218,7 +218,7 @@ def pil_transform_back(image_tensor):
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, save_path=".draw_image.png"):
+def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, bbox1_c="b", bbox2_c="r", save_path=".draw_image.png"):
     """
     将给定的两个不同的边界框序列分别用不同颜色绘制到图像上，并保存到指定位置。
 
@@ -244,7 +244,7 @@ def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, save_path=".dra
             y_pixel = int(y * height)
             w_pixel = int(w * width)
             h_pixel = int(h * height)
-            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor='b', facecolor='none')
+            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor=bbox1_c, facecolor='none')
             ax.add_patch(rect)
 
     # 绘制第二个方框序列，用蓝色
@@ -255,7 +255,7 @@ def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, save_path=".dra
             y_pixel = int(y * height)
             w_pixel = int(w * width)
             h_pixel = int(h * height)
-            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor='r', facecolor='none')
+            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor=bbox2_c, facecolor='none')
             ax.add_patch(rect)
 
     plt.axis('off')
