@@ -751,6 +751,8 @@ class SetCriterion(nn.Module):
         # ablation loss calculation
         losses["pred_boxes_ori"] = []
         losses["pred_boxes_merged"] = []
+        boxes_gt = [t["boxes"] for t in targets]
+        losses["boxes_gt"] = boxes_gt
         ori_outputs = outputs["ori_outputs"]
         indices_merged = self.matcher(outputs_without_aux, targets)
         indices_ori = self.matcher(ori_outputs, targets)

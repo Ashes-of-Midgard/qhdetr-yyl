@@ -303,6 +303,7 @@ def evaluate(
         loss_dict = criterion(outputs, targets)
         pred_boxes_ori = loss_dict.pop("pred_boxes_ori")
         pred_boxes_merged = loss_dict.pop("pred_boxes_merged")
+        boxes_gt = loss_dict.pop("boxes_gt")
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
 
@@ -328,11 +329,16 @@ def evaluate(
                     boxes_ori_all[batch] = []
                     boxes_merged_all[batch] = []
             for batch in boxes_ori_all.keys():
-                boxes_ori_all[batch] = torch.concat(boxes_ori_all[batch])
-                boxes_merged_all[batch] = torch.concat(boxes_merged_all[batch])
-                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_ori_all[batch], save_path=f"exps/ablatins/{t}_ori.png")
-                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_merged_all[batch], bbox1_c="red", save_path=f"exps/ablatins/{t}_merged.png")
-                draw_boxes_on_image(pil_transform_back(samples[batch]), boxes_ori_all[batch], boxes_merged_all[batch], save_path=f"exps/ablatins/{t}_all.png")
+                if len(boxes_ori_all[batch]) > 0:
+                    boxes_ori_all[batch] = torch.concat(boxes_ori_all[batch])
+                    boxes_merged_all[batch] = torch.concat(boxes_merged_all[batch])
+                    print(boxes_ori_all[batch])
+                    print(boxes_merged_all[batch])
+                    image = samples.tensors[batch]
+                    draw_boxes_on_image(pil_transform_back(image), boxes_gt[batch], bbox1_c="g", save_path=f"exps/ablatins/{t}_gt.png")
+                    draw_boxes_on_image(pil_transform_back(image), boxes_ori_all[batch], bbox1_c="r", save_path=f"exps/ablatins/{t}_ori.png")
+                    draw_boxes_on_image(pil_transform_back(image), boxes_merged_all[batch], bbox1_c="b", save_path=f"exps/ablatins/{t}_merged.png")
+                    draw_boxes_on_image(pil_transform_back(image), boxes_merged_all[batch], boxes_ori_all[batch], save_path=f"exps/ablatins/{t}_all.png")
         t += 1
 
         weight_dict = criterion.weight_dict

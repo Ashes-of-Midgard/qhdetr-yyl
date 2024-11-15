@@ -199,7 +199,7 @@ def unnormalize(tensor, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
     return tensor
 
 
-def pil_transform_back(image_tensor):
+def pil_transform_back(image_tensor, resize=1280):
     """
     将经过ToTensor和Normalize变换后的张量转换回PIL图像。
 
@@ -212,7 +212,7 @@ def pil_transform_back(image_tensor):
     unnormalized_tensor = unnormalize(image_tensor)
 
     # 将张量的值范围从 [0, 1] 转换到 [0, 255] 并转换为无符号8位整数类型
-    pil_image = TcT.ToPILImage()(unnormalized_tensor.clamp(0, 1).mul(255).byte())
+    pil_image = TcT.Resize(resize)(TcT.ToPILImage()(unnormalized_tensor.clamp(0, 1).mul(255).byte()))
 
     return pil_image
 
@@ -242,9 +242,9 @@ def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, bbox1_c="b", bb
             x, y, w, h = box.tolist()
             x_pixel = int(x * width)
             y_pixel = int(y * height)
-            w_pixel = int(w * width)
-            h_pixel = int(h * height)
-            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor=bbox1_c, facecolor='none')
+            w_pixel = int(0.5 * w * width)
+            h_pixel = int(0.5 * h * height)
+            rect = patches.Rectangle((x_pixel-w_pixel, y_pixel-h_pixel), 2*w_pixel, 2*h_pixel, linewidth=1, edgecolor=bbox1_c, facecolor='none')
             ax.add_patch(rect)
 
     # 绘制第二个方框序列，用蓝色
@@ -253,9 +253,9 @@ def draw_boxes_on_image(image, pred_bbox1=None, pred_bbox2=None, bbox1_c="b", bb
             x, y, w, h = box.tolist()
             x_pixel = int(x * width)
             y_pixel = int(y * height)
-            w_pixel = int(w * width)
-            h_pixel = int(h * height)
-            rect = patches.Rectangle((x_pixel, y_pixel), w_pixel, h_pixel, linewidth=1, edgecolor=bbox2_c, facecolor='none')
+            w_pixel = int(0.5 * w * width)
+            h_pixel = int(0.5 * h * height)
+            rect = patches.Rectangle((x_pixel-w_pixel, y_pixel-h_pixel), 2*w_pixel, 2*h_pixel, linewidth=1, edgecolor=bbox2_c, facecolor='none')
             ax.add_patch(rect)
 
     plt.axis('off')
