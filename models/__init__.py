@@ -10,6 +10,7 @@
 from .deformable_detr import build
 from .quant_ddetr.quant_ddetr import build_quant
 from .quant_ddetr.quant_ddetr_dis import build_quant_dis
+from .quant_ddetr.quant_ddetr_merge import build_quant_merge
 
 
 def build_model(args):
@@ -21,3 +22,5 @@ def build_quant_model(args):
 def build_quant_model_dis(args):
     return build_quant_dis(args)
 
+def build_quant_model_merge(args):
+    return build_quant_merge(args)

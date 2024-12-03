@@ -15,7 +15,7 @@ import util.misc as utils
 import datasets.samplers as samplers
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
-from models import build_model, build_quant_model
+from models import build_model, build_quant_model, build_quant_model_merge
 import pdb
 import wandb
 
@@ -235,6 +235,9 @@ def get_args_parser():
 
     # * logging technologies
     parser.add_argument("--use_wandb", action="store_true", default=False)
+
+    # merge
+    parser.add_argument("--merge", action="store_true")
     return parser
 
 
@@ -263,7 +266,10 @@ def main(args):
         )
 
     if args.quant:
-        model, criterion, postprocessors = build_quant_model(args)
+        if args.merge:
+            model, criterion, postprocessors = build_quant_model_merge(args)
+        else:
+            model, criterion, postprocessors = build_quant_model(args)
     else:
         model, criterion, postprocessors = build_model(args)
     model.to(device)

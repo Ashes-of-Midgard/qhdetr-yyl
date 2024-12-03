@@ -49,12 +49,16 @@ class FunLSQ(torch.autograd.Function):
 
 
 def grad_scale(x, scale):
+    # By applying this function, when the loss value backward
+    # through x, the gradient of x is actually scaled by the
+    # given scaling coefficient.
     y = x
     y_grad = x * scale
     return y.detach() - y_grad.detach() + y_grad
 
 
 def round_pass(x):
+    # This function is actually a backwardable round operation
     y = x.round()
     y_grad = x
     return y.detach() - y_grad.detach() + y_grad
@@ -221,10 +225,11 @@ class LinearLSQ(_LinearQ):
         return w_q
 
     def forward(self, x):
-        if self.alpha is None:
+        if self.alpha is None: # If alpha is None, it means no quantization
             return F.linear(x, self.weight, self.bias)
 
         w_q = self.qw(self.weight)
+        # w_q is the quantized weight
 
         x = self.act(x)
         # w = self.weight / alpha

@@ -30,48 +30,67 @@ def _is_power_of_2(n):
 def ms_deform_attn_core_pytorch(
     value, v_act : nn.Module, value_spatial_shapes, sampling_locations, attention_weights
 ):
+    """
+    Parameters:
+        - value: (N, Len_in, n_heads, d_model // n_heads)
+        - v_act: ActLSQ(nbits_a=4, in_features=n_heads)
+        - value_spatial_shapes: (n_levels, 2)
+        - sampling_locations: (N, Len_q, n_heads, n_levels, n_points, 2)
+        - attention_weights: (N, Len_q, n_heads, n_levels * n_points)
+    Return:
+        - (N, Len_q, d_model)
+    """
     # for debug and test only,
     # need to use cuda version instead
     N_, S_, M_, D_ = value.shape # [2, 14288, 8, 32]
     _, Lq_, M_, L_, P_, _ = sampling_locations.shape # [2, 14288, 8, 4, 4, 2]
     value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
+    # value_list: List, len(value_list) = n_levels
+    # value_list[i]: (N, H_i*W_i, n_heads, d_model // n_heads)
+    # sampling_locations: (N, Len_q, n_heads, n_levels, n_points, 2)
     sampling_grids = 2 * sampling_locations - 1
+    # sampling_grids: (N, Len_q, n_heads, n_levels, n_points, 2)
     sampling_value_list = []
     for lid_, (H_, W_) in enumerate(value_spatial_shapes):
-        # N_, H_*W_, M_, D_ -> N_, H_*W_, M_*D_ -> N_, M_*D_, H_*W_ -> N_*M_, D_, H_, W_
+        # (N, H*W, n_heads, d_model//n_heads) -> (N, H*W, d_model) -> (N, d_model, H*W) -> (N*n_heads, d_model//n_heads, H, W)
         value_l_ = (
             value_list[lid_].flatten(2).transpose(1, 2).reshape(N_ * M_, D_, H_, W_)
         )
-        # N_, Lq_, M_, P_, 2 -> N_, M_, Lq_, P_, 2 -> N_*M_, Lq_, P_, 2
+        # value_l: (N*n_heads, d_model//n_heads, H, W)
+        # (N, Len_q, n_heads, n_points, 2) -> (N, n_heads, Len_q, n_points, 2) -> (N*n_heads, Len_q, n_points, 2)
         sampling_grid_l_ = sampling_grids[:, :, :, lid_].transpose(1, 2).flatten(0, 1)
-        # N_*M_, D_, Lq_, P_
+        # sampling_grid_l_: (N*n_heads, Len_q, n_points, 2)
+        # (N*n_heads, d_model//n_heads, Len_q, n_points)
         sampling_value_l_ = F.grid_sample(
-            value_l_,
-            sampling_grid_l_,
+            value_l_, # (N*n_heads, d_model//n_heads, H, W)
+            sampling_grid_l_, # (N*n_heads, Len_q, n_points, 2)
             mode="bilinear",
             padding_mode="zeros",
             align_corners=False,
         )
         sampling_value_list.append(sampling_value_l_)
-    # (N_, Lq_, M_, L_, P_) -> (N_, M_, Lq_, L_, P_) -> (N_, M_, 1, Lq_, L_*P_)
+    # (N, Len_q, n_heads, n_levels, n_points) -> (N, n_heads, Len_q, n_levels, n_points) -> (N, n_heads, 1, Len_q, n_levels*n_points)
     attention_weights = attention_weights.transpose(1, 2).reshape(
         N_ * M_, 1, Lq_, L_ * P_
     )
-    
+    # attention_weights: (N*n_heads, 1, Len_q, n_levels*n_points)
     # sampling_value_list  [4 16 32 14288 4]
     value_mult = torch.stack(sampling_value_list, dim=-2).flatten(-2)
+    # value_mult: (N*n_heads, d_model//n_heads, Len_q, n_levels*n_points)
     value_mult = v_act(value_mult)
     output = (
         (value_mult * attention_weights)
         .sum(-1)
         .view(N_, M_ * D_, Lq_)
-    )   
+    )
+    # (N*n_heads, d_model//n_heads, Len_q, n_levels*n_points) * (N*n_heads, 1, Len_q, n_levels*n_points) -> (N*n_heads, d_model//n_heads, Len_q, n_levels*n_points)
+    # -> (N, d_model, Len_q)
     # output = (
     #     (torch.stack(sampling_value_list, dim=-2).flatten(-2) * attention_weights)
     #     .sum(-1)
     #     .view(N_, M_ * D_, Lq_)
     # )
-    return output.transpose(1, 2).contiguous()
+    return output.transpose(1, 2).contiguous() # (N, Len_q, d_model)
 
 
 
@@ -171,29 +190,41 @@ class QuantMS_DAttention(nn.Module):
         N, Len_in, _ = input_flatten.shape
         assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == Len_in
 
-        value = self.value_proj(input_flatten)
+        # input_flatten: (N, Len_in, d_model)
+        value = self.value_proj(input_flatten) # self.value_proj: LinearLSQ(d_model, d_model, nbits_w = n_bit, bias=True)
+        # value: (N, Len_in, d_model)
         if input_padding_mask is not None:
+            # input_padding_mask: (N, Len_in)
             value = value.masked_fill(input_padding_mask[..., None], float(0))
+            # value: (N, Len_in, d_model), for those elements in padded area, features' value are set to 0 by force.(They should be 0 in ideal assumption)
         
         value = value.view(N, Len_in, self.n_heads, self.d_model // self.n_heads)
+        # value: (N, Len_in, n_heads, d_model // n_heads)
+        # query: (N, Len_q, d_model)
         sampling_offsets = self.sampling_offsets(query).view(
             N, Len_q, self.n_heads, self.n_levels, self.n_points, 2
-        )
+        ) # self.sampling_offsets: LinearLSQ(d_model, n_heads * n_levels * n_points * 2, nbits_w = n_bit, bias=True)
+        # sampling_offsets: (N, Len_q, n_heads, n_levels, n_points, 2)
         attention_weights = self.attention_weights(query).view(
             N, Len_q, self.n_heads, self.n_levels * self.n_points
-        )
+        ) # self.attention_weights: LinearLSQ(d_model, n_heads * n_levels * n_points, nbits_w = n_bit, bias=True)
+        # attention_weights: (N, Len_q, n_heads, n_levels * n_points)
         attention_weights = F.softmax(attention_weights, -1).view(
             N, Len_q, self.n_heads, self.n_levels, self.n_points
         )
         # N, Len_q, n_heads, n_levels, n_points, 2
         if reference_points.shape[-1] == 2:          # one-stage
+            # input_spatial_shapes: (n_levels, 2)
             offset_normalizer = torch.stack(
                 [input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1
             )
+            # offset_normalizer: (n_levels, 2), switch two columns
             sampling_locations = (
                 reference_points[:, :, None, :, None, :]
                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
             )
+            # (N, Len_q, 1, n_levels, 1, 2) + (N, Len_q, n_heads, n_levels, n_points, 2) / (1, 1, 1, n_levels, 1, 2) -> (N, Len_q, n_heads, n_levels, n_points, 2)
+            # sampling_locations: (N, Len_q, n_heads, n_levels, n_points, 2)
         elif reference_points.shape[-1] == 4:     # two stage  +  iterative bounding box refinement
             sampling_locations = (
                 reference_points[:, :, None, :, None, :2]
@@ -217,16 +248,20 @@ class QuantMS_DAttention(nn.Module):
         #     self.im2col_step,
         # )
 
+        # sampling_locations: (N, Len_q, n_heads, n_levels, n_points, 2)
         # attention_weights[2, 14288, 8, 4, 4]  value[2, 14288, 8, 32]
+        # attention_weights: (N, Len_q, n_heads, n_levels * n_points)
         attention_weights = self.attn_act(attention_weights)
+        # attention_weights: (N, Len_q, n_heads, n_levels * n_points), quantized
         # value = self.v_act(value)
         output = ms_deform_attn_core_pytorch(
-            value,
-            self.v_act,
-            input_spatial_shapes,
-            sampling_locations,
-            attention_weights,
+            value, # (N, Len_in, n_heads, d_model // n_heads)
+            self.v_act, # ActLSQ(nbits_a=4, in_features=n_heads)
+            input_spatial_shapes, # (n_levels, 2)
+            sampling_locations, # (N, Len_q, n_heads, n_levels, n_points, 2)
+            attention_weights, # (N, Len_q, n_heads, n_levels * n_points)
         )
-        output = self.output_proj(output)
+        output = self.output_proj(output) # self.output_proj: LinearLSQ(d_model, d_model, nbits_w = n_bit, bias=True)
+        # output: (N, Len_q, d_model)
         return output
  
