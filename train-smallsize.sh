@@ -5,7 +5,7 @@
 
 # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 GPUS_PER_NODE=8 ./tools/run_dist_launch.sh 8 ./configs/qhdetr.sh \
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 GPUS_PER_NODE=8 ./tools/run_dist_launch.sh 8 ./configs/qhdetr-smallsize.sh \
-    --coco_path /data/yangyuanlong/datasets/coco2017 \
+    --coco_path ../datasets/coco2017 \
     --load_q_RN50 \
     --batch_size 1 \
 #    --eval

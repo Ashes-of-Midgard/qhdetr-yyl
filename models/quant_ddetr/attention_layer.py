@@ -150,12 +150,16 @@ def multi_head_attention_forward(query: Tensor,
 
         if torch.equal(query, key) and torch.equal(key, value):
             # self-attention
+            in_proj_weight = in_proj.qw(in_proj.weight)
+            in_proj_bias = in_proj.bias
             
             q, k, v = F.linear(query, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
 
         elif torch.equal(key, value):
             # encoder-decoder attention
             # This is inline in_proj function with in_proj_weight and in_proj_bias
+            in_proj_weight = in_proj.qw(in_proj.weight)
+            in_proj_bias = in_proj.bias
             _b = in_proj_bias
             _start = 0
             _end = embed_dim

@@ -1,0 +1,4 @@
+# ninja log v5
+0	8316	1733278588923169502	/data/wrq/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/wrq/qhdetr-yyl/models/ops/src/cpu/ms_deform_attn_cpu.o	ccf1e0f37e4993d7
+1	17573	1733278598187160114	/data/wrq/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/wrq/qhdetr-yyl/models/ops/src/cuda/ms_deform_attn_cuda.o	a684e6b1efbc1f3
+1	24420	1733278605015153155	/data/wrq/qhdetr-yyl/models/ops/build/temp.linux-x86_64-cpython-38/data/wrq/qhdetr-yyl/models/ops/src/vision.o	11870f05348770ab

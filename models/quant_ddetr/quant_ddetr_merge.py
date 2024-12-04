@@ -460,15 +460,15 @@ class SetCriterionMerge(nn.Module):
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def masked_kl_divergence(pred_logits: torch.Tensor, mask: torch.tensor) -> torch.Tensor:
-        result_matrix = torch.full_like(mask, float('inf'))
+    def masked_kl_divergence(self, pred_logits: torch.Tensor, mask: torch.tensor) -> torch.Tensor:
+        result_matrix = torch.full_like(mask.to(torch.float), float('inf'))
         mask_indices = torch.nonzero(mask, as_tuple=True)
 
-        if len(mask_indices) > 0:
-            batch_indices, query_indices_row, query_indices_column = mask_indices[0], mask_indices[1], mask_indices[2]
+        if len(mask_indices[0]) > 0:
+            proposal_indices_row, proposal_indices_column = mask_indices[0], mask_indices[1]
 
-            relevant_pred_logits_row = pred_logits[batch_indices, query_indices_row]
-            relevant_pred_logits_column = pred_logits[batch_indices, query_indices_column]
+            relevant_pred_logits_row = pred_logits[proposal_indices_row]
+            relevant_pred_logits_column = pred_logits[proposal_indices_column]
 
             log_softmax_preds_row = F.log_softmax(relevant_pred_logits_row, dim=1)
             softmax_preds_column = F.softmax(relevant_pred_logits_column, dim=1)
@@ -478,8 +478,7 @@ class SetCriterionMerge(nn.Module):
                 softmax_preds_column.unsqueeze(0),
                 reduction='none'
             )
-
-            result_matrix[batch_indices, query_indices_row, query_indices_column] = kl_divs.mean(dim=-1)
+            result_matrix[proposal_indices_row, proposal_indices_column] = kl_divs.mean(dim=-1)
 
         return result_matrix
     
@@ -555,16 +554,17 @@ class SetCriterionMerge(nn.Module):
                 losses.update(l_dict)
 
         # Merge Loss
-        pred_boxes = outputs["pred_boxes"] # pred_boxes: (bs, num_quereis_one2one, 4)
-        pred_logits = outputs["pred_logits"]
-        num_quereis = pred_boxes.shape[1]
+        pred_boxes = outputs["pred_boxes"].flatten(0, 1) # pred_boxes: (bs*num_quereis_one2one, 4)
+        pred_logits = outputs["pred_logits"].flatten(0, 1)
+        num_proposals = pred_boxes.shape[0]
         iou_matrix = box_ops.generalized_box_iou(
             box_ops.box_cxcywh_to_xyxy(pred_boxes),
             box_ops.box_cxcywh_to_xyxy(pred_boxes)
         )
-        eye_boolean = torch.eye(num_quereis, dtype=torch.bool)
+        eye_boolean = torch.eye(num_proposals, dtype=torch.bool).to(iou_matrix.device)
         iou_matrix_gt_threshold = (iou_matrix > 0.9) ^ eye_boolean
         # print(self.masked_kl_divergence(pred_logits, iou_matrix_gt_threshold))
+        # raise KeyboardInterrupt()
         kl_div_matrix_lt_threshold = self.masked_kl_divergence(pred_logits, iou_matrix_gt_threshold) < 0.3
         iou_matrix = iou_matrix * iou_matrix_gt_threshold.to(torch.float) * kl_div_matrix_lt_threshold.to(torch.float)
         loss_merge = torch.norm(iou_matrix, p=2)

@@ -592,7 +592,7 @@ class DeformableTransformerDecoderLayerMerge(nn.Module):
             tgt.transpose(0,1),
             tgt.transpose(0,1),
             tgt.transpose(0,1)
-        )
+        )[0].transpose(0,1)
         tgt = tgt + self.dropout_merge(tgt_merged)
         tgt = self.norm_merge(tgt)
 
