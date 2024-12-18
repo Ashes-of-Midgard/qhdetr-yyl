@@ -478,7 +478,7 @@ class SetCriterionMerge(nn.Module):
                 softmax_preds_column.unsqueeze(0),
                 reduction='none'
             )
-            result_matrix[proposal_indices_row, proposal_indices_column] = kl_divs.mean(dim=-1)
+            result_matrix[proposal_indices_row][:, proposal_indices_column] = kl_divs.mean(dim=-1)
 
         return result_matrix
     
