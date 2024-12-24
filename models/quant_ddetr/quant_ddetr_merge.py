@@ -565,8 +565,9 @@ class SetCriterionMerge(nn.Module):
         iou_matrix_gt_threshold = (iou_matrix > 0.9) ^ eye_boolean
         # print(self.masked_kl_divergence(pred_logits, iou_matrix_gt_threshold))
         # raise KeyboardInterrupt()
-        kl_div_matrix_lt_threshold = self.masked_kl_divergence(pred_logits, iou_matrix_gt_threshold) < 0.3
-        iou_matrix = iou_matrix * iou_matrix_gt_threshold.to(torch.float) * kl_div_matrix_lt_threshold.to(torch.float)
+        # kl_div_matrix_lt_threshold = self.masked_kl_divergence(pred_logits, iou_matrix_gt_threshold) < 0.3
+        # iou_matrix = iou_matrix * iou_matrix_gt_threshold.to(torch.float) * kl_div_matrix_lt_threshold.to(torch.float)
+        iou_matrix = iou_matrix * iou_matrix_gt_threshold.to(torch.float)
         loss_merge = torch.norm(iou_matrix, p=2)
         losses["loss_merge"] = loss_merge
 

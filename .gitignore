@@ -24,3 +24,5 @@ save*
 .pid
 *.ipynb*
 exps/
+run.sh
+install.sh
