@@ -22,4 +22,5 @@ python -u main.py \
     --look_forward_twice \
     --quant \
     --merge \
+    --merge_only_last_decoder \
     ${PY_ARGS}

@@ -106,6 +106,7 @@ def train_one_epoch(
     use_fp16=False,
     use_mec=False,
     total_epochs=12,
+    accumulation_steps=None
 ):
     model.train()
     criterion.train()
@@ -130,8 +131,8 @@ def train_one_epoch(
         with torch.cuda.amp.autocast() if use_fp16 else torch.cuda.amp.autocast(
             enabled=False
         ):
-            if use_fp16:
-                optimizer.zero_grad()
+            # if use_fp16:
+            #     optimizer.zero_grad()
 
             outputs = model(samples)  # samples.tensors [2, 3, 800, 1066]  outputs["head_inputs"] [2, 17821, 256]
 
@@ -146,6 +147,7 @@ def train_one_epoch(
         losses = sum(
             loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict
         )
+        losses = losses / accumulation_steps if accumulation_steps else losses # gradient accumulation
 
         if use_mec:
             # eps = 1e4   # 32
@@ -196,20 +198,20 @@ def train_one_epoch(
             scaler.scale(losses).backward()
             scaler.unscale_(optimizer)
         else:
-            optimizer.zero_grad()
             losses.backward()
-        if max_norm > 0:
-            grad_total_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm
-            )
-        else:
-            grad_total_norm = utils.get_total_grad_norm(model.parameters(), max_norm)
 
-        if use_fp16:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
+        if accumulation_steps is None or (i + 1) % accumulation_steps == 0:
+            if max_norm > 0:
+                grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            else:
+                grad_total_norm = utils.get_total_grad_norm(model.parameters(), max_norm)
+            
+            if use_fp16:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
 
         metric_logger.update(
             loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled

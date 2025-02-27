@@ -4,11 +4,13 @@
 # CUDA_VISIBLE_DEVICES=0 \
 
 # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 GPUS_PER_NODE=8 ./tools/run_dist_launch.sh 8 ./configs/qhdetr.sh \
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 GPUS_PER_NODE=8 ./tools/run_dist_launch.sh 8 ./configs/qhdetr.sh \
+CUDA_VISIBLE_DEVICES=0,1,2,3 GPUS_PER_NODE=4 ./tools/run_dist_launch.sh 4 ./configs/qhdetr.sh \
     --coco_path ../datasets/coco2017 \
     --resume ../models/r50_hybrid_branch_lambda1_group6_t1500_dp0_mqs_lft_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage_36eps.pth \
     --load_q_RN50 \
     --batch_size 1 \
+    --lr 1e-4 \
+    --lr_backbone 1e-5
 #    --eval
 # --resume ./checkpoint_437.pth 
 # --resume ./exps/12eps/one_stage/exp09/checkpoint0011.pth

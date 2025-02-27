@@ -46,6 +46,7 @@ class DeformableTransformerMerge(nn.Module):
         look_forward_twice=False,
         mixed_selection=False,
         use_checkpoint=False,
+        merge_only_last_decoder=False
     ):
         super().__init__()
 
@@ -68,7 +69,8 @@ class DeformableTransformerMerge(nn.Module):
             encoder_layer, num_encoder_layers, use_checkpoint
         )
 
-        decoder_layer = DeformableTransformerDecoderLayerMerge(
+        self.merge_only_last_decoder = merge_only_last_decoder
+        decoder_layer_merge = DeformableTransformerDecoderLayerMerge(
             d_model,
             n_bit,
             dim_feedforward,
@@ -78,12 +80,24 @@ class DeformableTransformerMerge(nn.Module):
             nhead,
             dec_n_points,
         )
-        self.decoder = DeformableTransformerDecoder(
+        decoder_layer = DeformableTransformerDecoderLayer(
+            d_model,
+            n_bit,
+            dim_feedforward,
+            dropout,
+            activation,
+            num_feature_levels,
+            nhead,
+            dec_n_points,
+        )
+        self.decoder = DeformableTransformerDecoderMerge(
             decoder_layer,
+            decoder_layer_merge,
             num_decoder_layers,
             return_intermediate_dec,
             look_forward_twice,
             use_checkpoint,
+            merge_only_last_decoder,
         )
 
         self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
@@ -501,6 +515,90 @@ class DeformableTransformerEncoder(nn.Module):
         return output
 
 
+class DeformableTransformerDecoderLayer(nn.Module):
+    def __init__(
+        self,
+        d_model=256,
+        n_bit=4,
+        d_ffn=1024,
+        dropout=0.1,
+        activation="relu",
+        n_levels=4,
+        n_heads=8,
+        n_points=4,
+    ):
+        super().__init__()
+
+        # cross attention
+        # self.cross_attn = QuantMS_DAttention(d_model, nhead, n_bit=n_bit, dropout=dropout, dist_align=False)
+        self.cross_attn = QuantMS_DAttention(d_model, n_levels, n_heads, n_points, n_bit=n_bit)
+        self.dropout1 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+
+        # self attention
+        self.self_attn = QuantMultiheadAttention(d_model, n_heads, n_bit=n_bit, dropout=dropout, dist_align=False)
+        self.dropout2 = nn.Dropout(dropout)
+        self.norm2 = nn.LayerNorm(d_model)
+
+        # ffn
+        self.linear1 = LinearLSQ(d_model, d_ffn, nbits_w=n_bit)
+        self.activation = _get_activation_fn(activation)
+        self.dropout3 = nn.Dropout(dropout)
+        self.linear2 = LinearLSQ(d_ffn, d_model, nbits_w=n_bit)
+        self.dropout4 = nn.Dropout(dropout)
+        self.norm3 = nn.LayerNorm(d_model)
+
+    @staticmethod
+    def with_pos_embed(tensor, pos):
+        return tensor if pos is None else tensor + pos
+
+    def forward_ffn(self, tgt):
+        tgt2 = self.linear2(self.dropout3(self.activation(self.linear1(tgt))))
+        tgt = tgt + self.dropout4(tgt2)
+        tgt = self.norm3(tgt)
+        return tgt
+
+    @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+    def forward(
+        self,
+        tgt,
+        query_pos,
+        reference_points,
+        src,
+        src_spatial_shapes,
+        level_start_index,
+        src_padding_mask=None,
+        self_attn_mask=None,
+    ):
+        # self attention
+        q = k = self.with_pos_embed(tgt, query_pos)
+        tgt2 = self.self_attn(
+            q.transpose(0, 1),
+            k.transpose(0, 1),
+            tgt.transpose(0, 1),
+            attn_mask=self_attn_mask,
+        )[0].transpose(0, 1)
+        tgt = tgt + self.dropout2(tgt2)
+        tgt = self.norm2(tgt)
+
+        # cross attention
+        tgt2 = self.cross_attn(
+            self.with_pos_embed(tgt, query_pos),
+            reference_points,
+            src,
+            src_spatial_shapes,
+            level_start_index,
+            src_padding_mask,
+        )
+        tgt = tgt + self.dropout1(tgt2)
+        tgt = self.norm1(tgt)
+
+        # ffn
+        tgt = self.forward_ffn(tgt)
+
+        return tgt
+
+
 class DeformableTransformerDecoderLayerMerge(nn.Module):
     def __init__(
         self,
@@ -627,17 +725,23 @@ def reverse_restore_feature_maps(src, src_spatial_shapes, bs, channels):
         start_index = end_index
     return features
 
-class DeformableTransformerDecoder(nn.Module):
+class DeformableTransformerDecoderMerge(nn.Module):
     def __init__(
         self,
         decoder_layer,
+        decoder_layer_merge,
         num_layers,
         return_intermediate=False,
         look_forward_twice=False,
         use_checkpoint=False,
+        merge_only_last_decoder=False
     ):
         super().__init__()
-        self.layers = _get_clones(decoder_layer, num_layers)
+        if merge_only_last_decoder:
+            self.layers = _get_clones(decoder_layer, num_layers-1)
+            self.layers.append(copy.deepcopy(decoder_layer_merge))
+        else:
+            self.layers = _get_clones(decoder_layer_merge, num_layers)
         self.num_layers = num_layers
         self.return_intermediate = return_intermediate
         self.look_forward_twice = look_forward_twice
@@ -813,5 +917,6 @@ def build_deforamble_transformer_merge(args):
         mixed_selection=args.mixed_selection,
         look_forward_twice=args.look_forward_twice,
         use_checkpoint=args.use_checkpoint,
+        merge_only_last_decoder=args.merge_only_last_decoder
     )
 

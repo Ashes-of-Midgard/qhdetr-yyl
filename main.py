@@ -238,6 +238,11 @@ def get_args_parser():
 
     # merge
     parser.add_argument("--merge", action="store_true")
+    parser.add_argument("--merge_only_last_decoder", action="store_true")
+
+    # gradient accumulation
+    parser.add_argument("--grad_acc", action="store_true")
+    parser.add_argument("--acc_steps", default=1, type=int)
     return parser
 
 
@@ -495,6 +500,7 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         mce_need = [args.epochs]
+        accumulation_steps = args.acc_steps if args.grad_acc else None
         train_stats = train_one_epoch(
             model,
             criterion,
@@ -509,6 +515,7 @@ def main(args):
             use_fp16=args.use_fp16,
             use_mec=args.mec_loss,      # for mce
             total_epochs=args.epochs   # for mce
+            accumulation_steps=accumulation_steps # for gradient accumulation
         )
         lr_scheduler.step()
         if args.output_dir:
