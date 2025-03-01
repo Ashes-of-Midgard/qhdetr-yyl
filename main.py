@@ -514,7 +514,7 @@ def main(args):
             use_wandb=args.use_wandb,
             use_fp16=args.use_fp16,
             use_mec=args.mec_loss,      # for mce
-            total_epochs=args.epochs   # for mce
+            total_epochs=args.epochs,   # for mce
             accumulation_steps=accumulation_steps # for gradient accumulation
         )
         lr_scheduler.step()
