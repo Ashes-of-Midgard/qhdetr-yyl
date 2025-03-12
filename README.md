@@ -16,6 +16,35 @@ cd qhdetr-yyl/models/ops
 python setup.py build install
 ```
 
+## prepare dataset&pretrained weights
+
+### 数据集
+#### COCO2017
+在qhdetr-yyl的上一级目录创建目录```datasets```
+从官方网站下载COCO2017数据集，目录结构为：
+```
+- datasets
+    - coco2017
+        - train2017
+            - xxx.jpg
+        - val2017
+            - xxx.jpg
+        - annotations
+            - instances_train2017.json
+            - instances_val2017.json
+```
+
+### 模型权重
+在qhdetr-yyl的上一级目录创建目录```models```
+下载模型权重：
+resnet50-4bit: 通过网盘分享的文件：rest50-4bit-7346.pth
+链接: https://pan.baidu.com/s/1J7LIKKlNuE9_v0Vedyrsvg?pwd=r32d 提取码: r32d 
+--来自百度网盘超级会员v6的分享
+deformable_detr：通过网盘分享的文件：r50_hybrid_branch_lambda1_group6_t1500_dp0_mqs_lft_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage_36eps.pth
+链接: https://pan.baidu.com/s/1hI394aO3RLa_-vixfnLvRQ?pwd=6cdm 提取码: 6cdm 
+--来自百度网盘超级会员v6的分享
+存储于```models```目录下
+
 ## script
 
 训练
